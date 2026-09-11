@@ -19,28 +19,19 @@ from openenv.core.env_server.mcp_types import Action, Observation
 
 from clemcore.backends import load_models
 from clemcore.clemgame.callbacks.base import GameBenchmarkCallbackList
-from clemcore.clemgame.envs.openenv.models import (
-    ClemGameAction,
-    ClemGameObservation,
-    ClemGameState,
-)
+from clemcore.clemgame.envs.openenv.models import (ClemGameAction, ClemGameObservation, ClemGameState)
 from clemcore.clemgame.envs.pettingzoo import check_agent_mapping_for_training
 from clemcore.clemgame.envs.pettingzoo.master import GameMasterEnv
-from clemcore.clemgame.envs.pettingzoo.wrappers import (
-    GameBenchmarkWrapper,
-    GameInstanceIteratorWrapper,
-    SinglePlayerWrapper,
-)
+from clemcore.clemgame.envs.pettingzoo.wrappers import (GameBenchmarkWrapper, GameInstanceIteratorWrapper,
+                                                        SinglePlayerWrapper)
 from clemcore.clemgame.instances import GameInstances, to_instance_filter
 from clemcore.clemgame.master import GameState
 from clemcore.clemgame.registry import GameRegistry
 
-
 module_logger = logging.getLogger(__name__)
 
 
-def _image_mime_type(reference: str,
-                     content_type: str | None = None) -> str:
+def _image_mime_type(reference: str, content_type: str | None = None) -> str:
     """Resolve an image MIME type from an HTTP header or source name."""
     if content_type:
         mime_type = content_type.split(";", 1)[0].strip().lower()
@@ -91,20 +82,14 @@ def _portable_image(image: Any) -> dict[str, str]:
     if reference.startswith(("http://", "https://")):
         response = requests.get(reference, timeout=(30, 120))
         response.raise_for_status()
-        mime_type = _image_mime_type(
-            reference,
-            response.headers.get("Content-Type"),
-        )
+        mime_type = _image_mime_type(reference, response.headers.get("Content-Type"))
         image_bytes = response.content
     else:
         path = Path(reference)
         mime_type = _image_mime_type(reference)
         image_bytes = path.read_bytes()
 
-    return {
-        "data": base64.b64encode(image_bytes).decode("ascii"),
-        "mimeType": mime_type,
-    }
+    return {"data": base64.b64encode(image_bytes).decode("ascii"), "mimeType": mime_type}
 
 
 def _portable_context(context: dict) -> dict:
@@ -137,8 +122,7 @@ def _observation_to_dict(observation: ClemGameObservation) -> dict:
             "metadata": observation.metadata}
 
 
-def _terminal_details(state: GameState,
-                      truncated: bool) -> tuple[str | None, str | None]:
+def _terminal_details(state: GameState, truncated: bool) -> tuple[str | None, str | None]:
     """Return standardized outcome and reason values for a terminal game state."""
     outcome = getattr(state, "outcome", None)
     outcome = getattr(outcome, "value", outcome)
@@ -157,15 +141,12 @@ def _terminal_details(state: GameState,
     return outcome, reason
 
 
-def _terminal_context(outcome: str | None,
-                      reason: str | None) -> dict[str, str]:
+def _terminal_context(outcome: str | None, reason: str | None) -> dict[str, str]:
     """Create the model-facing message for a terminal step without new context."""
-    messages = {
-        "success": "The game is complete. The objective was achieved.",
-        "failure": "The game is complete. The objective was not achieved.",
-        "aborted": "The game ended before normal completion.",
-        "truncated": "The game ended because its execution limit was reached.",
-    }
+    messages = {"success": "The game is complete. The objective was achieved.",
+                "failure": "The game is complete. The objective was not achieved.",
+                "aborted": "The game ended before normal completion.",
+                "truncated": "The game ended because its execution limit was reached."}
     content = messages.get(outcome, "The game has ended.")
 
     if reason:
@@ -183,25 +164,14 @@ class SelectableClemGameEnvironment:
     pettingzoo wrapper stack with a filter matching only that row.
     """
 
-    def __init__(self,
-                 game_name: str,
-                 *,
-                 instances_filename: str | None = None,
-                 game_instance_split: str | None = None,
-                 single_pass: bool = False,
-                 learner_agent: str = "player_0",
-                 env_agents: Dict[str, str] | None = None,
-                 gen_args: Dict[str, Any] | None = None,
-                 callbacks: GameBenchmarkCallbackList | None = None,
+    def __init__(self, game_name: str, *, instances_filename: str | None = None, game_instance_split: str | None = None,
+                 single_pass: bool = False, learner_agent: str = "player_0", env_agents: Dict[str, str] | None = None,
+                 gen_args: Dict[str, Any] | None = None, callbacks: GameBenchmarkCallbackList | None = None,
                  reward_func: Callable[[dict, str, GameState, dict], float] | None = None,
                  feedback_func: Callable[[dict, str, GameState, dict], str | None] | None = None):
         module_logger.info("Initialize SelectableClemGameEnvironment: "
                            "game_name=%s, instances_filename=%s, game_instance_split=%s, "
-                           "learner_agent=%s, env_agents=%s",
-                           game_name,
-                           instances_filename,
-                           game_instance_split,
-                           learner_agent,
+                           "learner_agent=%s, env_agents=%s", game_name, instances_filename, game_instance_split, learner_agent,
                            env_agents)
 
         self._game_name = game_name
@@ -213,10 +183,7 @@ class SelectableClemGameEnvironment:
         self._reward_func = reward_func
         self._feedback_func = feedback_func
         self._game_env: AECEnv | None = None
-        self._state = ClemGameState(game_name=game_name,
-                                    episode_id="episode_0",
-                                    step_count=0,
-                                    episode_count=0)
+        self._state = ClemGameState(game_name=game_name, episode_id="episode_0", step_count=0, episode_count=0)
 
         env_agents = env_agents or {}
 
@@ -237,11 +204,7 @@ class SelectableClemGameEnvironment:
         else:
             self._env_agents = env_agents
 
-    def reset(self,
-              seed=None,
-              episode_id=None,
-              experiment_name: str | None = None,
-              game_id: int | str | None = None,
+    def reset(self, seed=None, episode_id=None, experiment_name: str | None = None, game_id: int | str | None = None,
               **kwargs) -> ClemGameObservation:
         """Build the game environment for the selected instance and start an episode
 
@@ -261,17 +224,15 @@ class SelectableClemGameEnvironment:
         if self._game_env is not None:
             self._game_env.close()
 
-        # ----- reset step 1 -----
+        # reset step 1
         # restrict the instances to the configured split, when a split was configured
         split_filter = None
 
         if self._game_instance_split:
-            dataset = load_dataset("colab-potsdam/playpen-data",
-                                   "instances",
-                                   split=self._game_instance_split)
+            dataset = load_dataset("colab-potsdam/playpen-data", "instances", split=self._game_instance_split)
             split_filter = to_instance_filter(dataset)
 
-        # ----- reset step 2 -----
+        # reset step 2
         # narrow the remaining instances down to the single requested one
         if experiment_name is None and game_id is None:
             # without a selection the split filter alone decides which rows are served
@@ -288,15 +249,12 @@ class SelectableClemGameEnvironment:
                 return (row["experiment"]["name"] == experiment_name
                         and int(row["game_instance"]["game_id"]) == selected_game_id)
 
-        # ----- reset step 3 -----
+        # reset step 3
         # build the wrapper stack from the inside out, each layer adding one concern
 
         # the game master runs the game, the benchmark wrapper adds callbacks and scoring
-        game_env = GameBenchmarkWrapper(GameMasterEnv,
-                                        game_spec=self._game_spec,
-                                        callbacks=self._callbacks,
-                                        reward_func=self._reward_func,
-                                        feedback_func=self._feedback_func)
+        game_env = GameBenchmarkWrapper(GameMasterEnv, game_spec=self._game_spec, callbacks=self._callbacks,
+                                        reward_func=self._reward_func, feedback_func=self._feedback_func)
 
         # reject calls made in an invalid order, such as stepping before resetting
         game_env = OrderEnforcingWrapper(game_env)
@@ -309,23 +267,17 @@ class SelectableClemGameEnvironment:
             raise ValueError("No game instances matched the requested selection.")
 
         # supply those instances to the game, one per episode
-        game_env = GameInstanceIteratorWrapper(game_env,
-                                               game_instances,
-                                               single_pass=self._single_pass)
+        game_env = GameInstanceIteratorWrapper(game_env, game_instances, single_pass=self._single_pass)
 
         # answer for every native player slot so only the learner slot stays exposed
-        game_env = SinglePlayerWrapper(game_env,
-                                       self._learner_agent,
-                                       env_agents=self._env_agents)
+        game_env = SinglePlayerWrapper(game_env, self._learner_agent, env_agents=self._env_agents)
 
         self._game_env = game_env
 
-        # ----- reset step 4 -----
+        # reset step 4
         # start the episode and record it in the environment state
         module_logger.info("Reset SelectableClemGameEnvironment '%s' for experiment=%s, game_id=%s",
-                           self._state.game_name,
-                           experiment_name,
-                           game_id)
+                           self._state.game_name, experiment_name, game_id)
 
         options = kwargs if kwargs else None
         self._game_env.reset(seed=seed, options=options)
@@ -335,9 +287,7 @@ class SelectableClemGameEnvironment:
         self._state.episode_count += 1
         self._state.episode_id = f"episode_{self._state.episode_count}"
 
-        return ClemGameObservation(context=observation,
-                                   done=done,
-                                   metadata={**info, "truncated": truncated})
+        return ClemGameObservation(context=observation, done=done, metadata={**info, "truncated": truncated})
 
     def _read_observation(self) -> tuple:
         """Read the learner's turn or terminal state, then finish dead-agent cleanup."""
@@ -346,25 +296,21 @@ class SelectableClemGameEnvironment:
             raise RuntimeError("Environment has not been reset. Call start_game first.")
 
         if env.agent_selection is None:
-            # Autoplay may already have removed every agent. last() requires a
-            # selected agent, but the game can still supply its final context.
+            # autoplay may already have removed every agent. last() requires a
+            # selected agent, but the game can still supply its final context
             agent = self._learner_agent
-            return (env.observe(agent), env.rewards.get(agent, 0.0),
-                    env.terminations.get(agent, True),
+            return (env.observe(agent), env.rewards.get(agent, 0.0), env.terminations.get(agent, True),
                     env.truncations.get(agent, False), env.infos.get(agent, {}))
 
         observation, reward, done, truncated, info = env.last()
         if done or truncated:
-            # Capture the result before PettingZoo removes the learner's state.
-            # SinglePlayerWrapper also completes the other players' cleanup.
+            # capture the result before pettingzoo removes the learner's state
+            # singleplayerwrapper also completes the other players' cleanup
             observation, info = deepcopy(observation), deepcopy(info)
             env.step(None)
         return observation, reward, done, truncated, info
 
-    def step(self,
-             action: ClemGameAction,
-             timeout_s=None,
-             **kwargs) -> ClemGameObservation:
+    def step(self, action: ClemGameAction, timeout_s=None, **kwargs) -> ClemGameObservation:
         """Apply one agent response to the running game
 
         Args:
@@ -403,10 +349,7 @@ class SelectableClemGameEnvironment:
                 observation = _terminal_context(outcome, reason)
                 metadata["terminal_context_normalized"] = True
 
-        return ClemGameObservation(context=observation,
-                                   reward=float(reward),
-                                   done=done,
-                                   metadata=metadata)
+        return ClemGameObservation(context=observation, reward=float(reward), done=done, metadata=metadata)
 
     def abort(self, reason: str) -> ClemGameObservation:
         """Abort the active episode through the normal game finalization path.
@@ -428,12 +371,8 @@ class SelectableClemGameEnvironment:
         if not done:
             raise RuntimeError("Control abort did not terminate the game episode.")
 
-        return ClemGameObservation(context=observation,
-                                   reward=float(reward),
-                                   done=done,
-                                   metadata={**info,
-                                             **dict(truncated=truncated,
-                                                    control_failure=True)})
+        return ClemGameObservation(context=observation, reward=float(reward), done=done, metadata={**info,
+                                                                                                   **dict(truncated=truncated, control_failure=True)})
 
     @property
     def state(self) -> ClemGameState:
@@ -458,21 +397,17 @@ class ClemGameMCPEnvironment(MCPEnvironment):
     regular reset and step interface.
     """
 
-    def __init__(self,
-                 clem_env: SelectableClemGameEnvironment,
-                 completion_path: str | Path | None = None):
+    def __init__(self, clem_env: SelectableClemGameEnvironment, completion_path: str | Path | None = None):
 
         self.clem_env = clem_env
-        self._completion_path = (Path(completion_path)
-                                 if completion_path is not None else None)
+        self._completion_path = (Path(completion_path) if completion_path is not None else None)
 
         mcp = FastMCP("clem-game")
 
         super().__init__(mcp)
 
         @self.tool()
-        def start_game(game_id: int | None = None,
-                       experiment_name: str | None = None) -> dict:
+        def start_game(game_id: int | None = None, experiment_name: str | None = None) -> dict:
             """start/reset the current clembench game and return the initial observation."""
             reset_kwargs = {}
 
@@ -482,16 +417,12 @@ class ClemGameMCPEnvironment(MCPEnvironment):
             if experiment_name is not None:
                 reset_kwargs["experiment_name"] = experiment_name
 
-            return self._record_terminal_observation(
-                self.clem_env.reset(**reset_kwargs)
-            )
+            return self._record_terminal_observation(self.clem_env.reset(**reset_kwargs))
 
         @self.tool()
         def submit_response(response: str) -> dict:
             """submit a response/move to the current clembench game."""
-            return self._record_terminal_observation(
-                self.clem_env.step(ClemGameAction(response=response))
-            )
+            return self._record_terminal_observation(self.clem_env.step(ClemGameAction(response=response)))
 
         @self.tool()
         def get_state() -> dict:
@@ -503,24 +434,15 @@ class ClemGameMCPEnvironment(MCPEnvironment):
             """abort the active game after an external-agent control failure."""
             return self._record_terminal_observation(self.clem_env.abort(reason))
 
-    def _record_terminal_observation(self,
-                                     observation: ClemGameObservation) -> dict:
+    def _record_terminal_observation(self, observation: ClemGameObservation) -> dict:
         """Return an MCP observation and atomically mark a completed episode."""
         result = _observation_to_dict(observation)
 
         if result["done"] is True and self._completion_path is not None:
-            payload = {"done": True,
-                       "reward": result["reward"],
-                       "metadata": result["metadata"],
-                       "source": "host_mcp"}
-            temporary_path = self._completion_path.with_suffix(
-                self._completion_path.suffix + ".tmp"
-            )
+            payload = {"done": True, "reward": result["reward"], "metadata": result["metadata"], "source": "host_mcp"}
+            temporary_path = self._completion_path.with_suffix(self._completion_path.suffix + ".tmp")
             self._completion_path.parent.mkdir(parents=True, exist_ok=True)
-            temporary_path.write_text(json.dumps(payload,
-                                                 ensure_ascii=False,
-                                                 default=str),
-                                      encoding="utf-8")
+            temporary_path.write_text(json.dumps(payload, ensure_ascii=False, default=str), encoding="utf-8")
             os.replace(temporary_path, self._completion_path)
 
         return result
@@ -530,10 +452,7 @@ class ClemGameMCPEnvironment(MCPEnvironment):
         self._record_terminal_observation(observation)
         return observation
 
-    def _step_impl(self,
-                   action: Action,
-                   timeout_s: float | None = None,
-                   **kwargs) -> Observation:
+    def _step_impl(self, action: Action, timeout_s: float | None = None, **kwargs) -> Observation:
         if isinstance(action, ClemGameAction):
             observation = self.clem_env.step(action, timeout_s=timeout_s, **kwargs)
             self._record_terminal_observation(observation)

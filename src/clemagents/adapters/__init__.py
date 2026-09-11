@@ -6,8 +6,7 @@ from pathlib import Path
 from clemagents.adapters.base import ExternalAgentHarness
 
 
-def harness_class_for_agent(agent_name: str,
-                            registry_path: str | Path) -> type[ExternalAgentHarness]:
+def harness_class_for_agent(agent_name: str, registry_path: str | Path) -> type[ExternalAgentHarness]:
     """Resolve an external-agent adapter class from the agent registry."""
 
     registry_path = Path(registry_path)
@@ -25,15 +24,11 @@ def harness_class_for_agent(agent_name: str,
 
     module = importlib.import_module(f"clemagents.adapters.{backend}")
     harness_classes = [candidate for candidate in vars(module).values()
-                       if inspect.isclass(candidate)
-                       and candidate is not ExternalAgentHarness
-                       and issubclass(candidate, ExternalAgentHarness)
-                       and candidate.__module__ == module.__name__]
+                       if inspect.isclass(candidate) and candidate is not ExternalAgentHarness
+                       and issubclass(candidate, ExternalAgentHarness) and candidate.__module__ == module.__name__]
 
     if len(harness_classes) != 1:
-        raise RuntimeError(
-            f"Expected exactly one external-agent harness in {module.__name__}, "
-            f"found {len(harness_classes)}"
-        )
+        raise RuntimeError(f"Expected exactly one external-agent harness in {module.__name__}, "
+                           f"found {len(harness_classes)}")
 
     return harness_classes[0]

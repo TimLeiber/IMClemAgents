@@ -11,7 +11,6 @@ from fastmcp import FastMCP
 from fastmcp.tools.base import ToolResult
 from mcp.types import ImageContent, TextContent
 
-
 DEFAULT_OPENENV_MCP_URL = "http://127.0.0.1:8001/mcp"
 
 SERVER_CONFIG_PATH = Path(__file__).parent / "mcp_server_config.yaml"
@@ -19,14 +18,10 @@ SERVER_CONFIG_PATH = Path(__file__).parent / "mcp_server_config.yaml"
 # response submitted for an agent that stopped before the game was finished
 CONTROL_FAILURE_RESPONSE = "AGENT_CONTROL_ERROR: external harness ended before completing the game"
 REPEATED_START_MESSAGE = "The episode was aborted because start_game was called more than once."
-MODEL_MESSAGE_OUTPUT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "message": {"type": "string"},
-    },
-    "required": ["message"],
-    "additionalProperties": False,
-}
+MODEL_MESSAGE_OUTPUT_SCHEMA = {"type": "object",
+                               "properties": {"message": {"type": "string"}},
+                               "required": ["message"],
+                               "additionalProperties": False}
 
 
 def _write_completion_marker(result: dict[str, Any], control_failure: bool = False) -> None:
@@ -35,27 +30,19 @@ def _write_completion_marker(result: dict[str, Any], control_failure: bool = Fal
     if not completion_path:
         return
 
-    payload = {
-        "done": result.get("done") is True,
-        "control_failure": control_failure,
-        "reward": result.get("reward"),
-        "metadata": result.get("metadata") or {},
-    }
+    payload = {"done": result.get("done") is True,
+               "control_failure": control_failure,
+               "reward": result.get("reward"),
+               "metadata": result.get("metadata") or {}}
     path = Path(completion_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
-IMAGE_FILE_EXTENSIONS = {
-    "image/jpeg": ".jpg",
-    "image/png": ".png",
-    "image/webp": ".webp",
-    "image/gif": ".gif",
-}
+IMAGE_FILE_EXTENSIONS = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif"}
 
 
-def _materialize_observation_images(images: list[dict[str, str]],
-                                    observation_dir: str | Path,
+def _materialize_observation_images(images: list[dict[str, str]], observation_dir: str | Path,
                                     observation_index: int) -> list[Path]:
     """Write one observation's transported images into the episode workspace."""
     target_dir = Path(observation_dir) / f"observation_{observation_index:03d}"
@@ -79,9 +66,7 @@ def _materialize_observation_images(images: list[dict[str, str]],
     return paths
 
 
-def _model_facing_message(result: dict[str, Any],
-                          *,
-                          observation_dir: str | Path | None = None,
+def _model_facing_message(result: dict[str, Any], *, observation_dir: str | Path | None = None,
                           observation_index: int = 0) -> ToolResult:
     """Return the environment message as standard MCP content blocks.
 
@@ -98,12 +83,7 @@ def _model_facing_message(result: dict[str, Any],
 
     content = context.get("content")
     message = {"message": "" if content is None else str(content)}
-    blocks = [
-        TextContent(
-            type="text",
-            text=json.dumps(message, ensure_ascii=False, separators=(",", ":")),
-        )
-    ]
+    blocks = [TextContent(type="text", text=json.dumps(message, ensure_ascii=False, separators=(",", ":")))]
 
     images = context.get("image") or []
 
@@ -125,36 +105,19 @@ def _model_facing_message(result: dict[str, Any],
         if not mime_type.startswith("image/"):
             raise ValueError(f"Unsupported model-facing media type: {mime_type!r}")
 
-        # Validate the payload before it is passed to a harness or written to
-        # the episode workspace.
+        # validate the payload before it is passed to a harness or written to
+        # the episode workspace
         base64.b64decode(data, validate=True)
         encoded_images.append({"data": data, "mimeType": mime_type})
 
-        blocks.append(
-            ImageContent(
-                type="image",
-                data=data,
-                mimeType=mime_type,
-            )
-        )
+        blocks.append(ImageContent(type="image", data=data, mimeType=mime_type))
 
     if encoded_images and observation_dir is not None:
-        image_paths = _materialize_observation_images(
-            encoded_images,
-            observation_dir,
-            observation_index,
-        )
+        image_paths = _materialize_observation_images(encoded_images, observation_dir, observation_index)
 
         paths_text = "\n".join(f"- {path}" for path in image_paths)
-        blocks.append(
-            TextContent(
-                type="text",
-                text=(
-                    "The observation images are also available as local files:\n"
-                    f"{paths_text}"
-                ),
-            )
-        )
+        blocks.append(TextContent(type="text", text=("The observation images are also available as local files:\n"
+                                                     f"{paths_text}")))
 
     return ToolResult(content=blocks, structured_content=message)
 
@@ -172,9 +135,7 @@ class OpenEnvMCPClient:
         self.session_id: Optional[str] = None
         self._request_id = 0
 
-    def _request(self,
-                 method: str,
-                 params: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         """Send one JSON-RPC request to the host MCP server
 
         Args:
@@ -186,14 +147,9 @@ class OpenEnvMCPClient:
         """
         self._request_id += 1
 
-        payload = {"jsonrpc": "2.0",
-                   "id": self._request_id,
-                   "method": method,
-                   "params": params or {}}
+        payload = {"jsonrpc": "2.0", "id": self._request_id, "method": method, "params": params or {}}
 
-        response = requests.post(self.mcp_url,
-                                 json=payload,
-                                 timeout=(30, None))
+        response = requests.post(self.mcp_url, json=payload, timeout=(30, None))
         response.raise_for_status()
 
         data = response.json()
@@ -219,8 +175,7 @@ class OpenEnvMCPClient:
         session_path = os.environ.get("GAME_SESSION_PATH")
 
         if session_path:
-            Path(session_path).write_text(json.dumps({"session_id": self.session_id}),
-                                          encoding="utf-8")
+            Path(session_path).write_text(json.dumps({"session_id": self.session_id}), encoding="utf-8")
 
         return self.session_id
 
@@ -232,24 +187,19 @@ class OpenEnvMCPClient:
         self._request("openenv/session/close", {"session_id": self.session_id})
         self.session_id = None
 
-        # The shared file is a recovery marker for a session that is still
-        # active when the container exits. Remove it only after the host has
+        # the shared file is a recovery marker for a session that is still
+        # active when the container exits. remove it only after the host has
         # confirmed the close; if closing fails, leave it in place so the
-        # pipeline can retry cleanup outside the container.
+        # pipeline can retry cleanup outside the container
         session_path = os.environ.get("GAME_SESSION_PATH")
 
         if session_path:
             try:
                 Path(session_path).unlink(missing_ok=True)
             except OSError as error:
-                print(
-                    f"failed to remove closed OpenEnv session marker: {error}",
-                    file=sys.stderr,
-                )
+                print(f"failed to remove closed OpenEnv session marker: {error}", file=sys.stderr)
 
-    def call_tool(self,
-                  name: str,
-                  arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
         """Invoke one game tool on the host within the episode session
 
         Args:
@@ -270,10 +220,7 @@ class OpenEnvMCPClient:
             name = "abort_game"
             arguments = {"reason": CONTROL_FAILURE_RESPONSE}
 
-        result = self._request("tools/call",
-                               {"session_id": session_id,
-                                "name": name,
-                                "arguments": arguments})
+        result = self._request("tools/call", {"session_id": session_id, "name": name, "arguments": arguments})
 
         return result["data"]
 
@@ -310,56 +257,34 @@ def create_mcp_bridge(openenv_mcp_url: str | None = None) -> FastMCP:
     mcp = FastMCP("game", instructions=_load_server_instructions())
     client = OpenEnvMCPClient(openenv_mcp_url)
 
-    game_state = {"started": False,
-                  "done": False,
-                  "result": None,
-                  "observation_index": 0}
+    game_state = {"started": False, "done": False, "result": None, "observation_index": 0}
     observation_dir = os.environ.get("GAME_OBSERVATION_DIR")
 
     def model_facing_message(result: dict[str, Any]) -> ToolResult:
         """Render one sequential observation for the connected harness."""
         observation_index = game_state["observation_index"]
         game_state["observation_index"] += 1
-        return _model_facing_message(
-            result,
-            observation_dir=observation_dir,
-            observation_index=observation_index,
-        )
+        return _model_facing_message(result, observation_dir=observation_dir, observation_index=observation_index)
 
     @mcp.tool(output_schema=MODEL_MESSAGE_OUTPUT_SCHEMA)
     def start_game() -> ToolResult:
         """Start the selected game and return its initial environment message."""
         if game_state["started"]:
             if game_state["done"]:
-                result = {
-                    "context": {
-                        "role": "user",
-                        "content": REPEATED_START_MESSAGE,
-                    },
-                    "reward": None,
-                    "done": True,
-                    "metadata": {"repeated_start_game": True},
-                }
+                result = {"context": {"role": "user",
+                                      "content": REPEATED_START_MESSAGE},
+                          "reward": None,
+                          "done": True,
+                          "metadata": {"repeated_start_game": True}}
                 game_state["result"] = result
                 _write_completion_marker(result, control_failure=True)
                 return model_facing_message(result)
 
-            aborted_result = client.call_tool(
-                "submit_response",
-                {"response": CONTROL_FAILURE_RESPONSE}
-            )
-            result = {
-                **aborted_result,
-                "context": {
-                    "role": "user",
-                    "content": REPEATED_START_MESSAGE,
-                },
-                "done": True,
-                "metadata": {
-                    **(aborted_result.get("metadata") or {}),
-                    "repeated_start_game": True,
-                },
-            }
+            aborted_result = client.call_tool("submit_response", {"response": CONTROL_FAILURE_RESPONSE})
+            result = {**aborted_result, "context": {"role": "user",
+                                                    "content": REPEATED_START_MESSAGE},
+                      "done": True,
+                      "metadata": {**(aborted_result.get("metadata") or {}), "repeated_start_game": True}}
             game_state["result"] = result
             game_state["done"] = True
 
@@ -387,14 +312,9 @@ def create_mcp_bridge(openenv_mcp_url: str | None = None) -> FastMCP:
         if started_path:
             path = Path(started_path)
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(
-                json.dumps({
-                    "session_id": client.session_id,
-                    "experiment_name": experiment_name,
-                    "game_id": int(game_id) if game_id is not None else None
-                }),
-                encoding="utf-8"
-            )
+            path.write_text(json.dumps({"session_id": client.session_id,
+                                        "experiment_name": experiment_name,
+                                        "game_id": int(game_id) if game_id is not None else None}), encoding="utf-8")
 
         game_state["started"] = True
         game_state["result"] = result
@@ -412,15 +332,11 @@ def create_mcp_bridge(openenv_mcp_url: str | None = None) -> FastMCP:
     def submit_response(response: str) -> ToolResult:
         """Submit a response or move to the current game."""
         if not game_state["started"]:
-            result = {
-                "context": {
-                    "role": "user",
-                    "content": "The episode was aborted because submit_response was called before start_game.",
-                },
-                "reward": None,
-                "done": True,
-                "metadata": {"start_game_required": True},
-            }
+            result = {"context": {"role": "user",
+                                  "content": "The episode was aborted because submit_response was called before start_game."},
+                      "reward": None,
+                      "done": True,
+                      "metadata": {"start_game_required": True}}
             game_state["done"] = True
             game_state["result"] = result
             _write_completion_marker(result, control_failure=True)
@@ -442,6 +358,7 @@ def create_mcp_bridge(openenv_mcp_url: str | None = None) -> FastMCP:
                 _write_completion_marker(result)
 
         return model_facing_message(result)
+
     return mcp
 
 

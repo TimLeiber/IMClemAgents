@@ -48,13 +48,16 @@ agentclem \
   --experiment_name civic_public \
   --max-instances 1 \
   --results_dir test_results \
-  --temperature 1 \
   --episode-timeout 1200
 ```
 
 For a second, automated player, provide `--agent-player player_1 --models MODEL`.
 `-l` controls the automated players' output limit; `--episode-timeout` is the
 harness episode's wall-clock limit. A benchmark run calls the configured providers.
+
+Reasoning and sampling controls use each harness's native interface, configured
+in the agent registry. `--temperature` requires adapter support (currently OpenClaw);
+it is not injected into API requests. See [native controls](documentation/pipeline.md#configuration-and-traces).
 
 ## Scoring and transcripts
 

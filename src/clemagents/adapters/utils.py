@@ -11,14 +11,9 @@ from typing import Any, Iterator, Sequence
 
 MODEL_CONNECTION_ENV = "AGENT_MODEL_CONNECTION_PATH"
 GAME_MCP_SERVER_NAME = "game"
-MCP_EPISODE_ENV = (
-    "GAME_EXPERIMENT",
-    "GAME_INSTANCE_ID",
-    "GAME_COMPLETION_PATH",
-    "GAME_STARTED_PATH",
-    "GAME_SESSION_PATH",
-    "GAME_OBSERVATION_DIR",
-)
+MCP_EPISODE_ENV = ("GAME_EXPERIMENT", "GAME_INSTANCE_ID", "GAME_COMPLETION_PATH", "GAME_STARTED_PATH",
+                   "GAME_SESSION_PATH", "GAME_OBSERVATION_DIR",
+                   )
 
 
 def new_game_completion_path() -> Path:
@@ -40,25 +35,13 @@ def read_game_completion(path: Path) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
-def run_process_until_game_complete(
-    command: Sequence[str],
-    *,
-    completion_path: Path,
-    input_text: str | None = None,
-    cwd: str | Path | None = None,
-    timeout: float | None = None,
-    completion_grace: float = 0.0,
-) -> tuple[subprocess.CompletedProcess[str], bool]:
+def run_process_until_game_complete(command: Sequence[str], *, completion_path: Path, input_text: str | None = None,
+                                    cwd: str | Path | None = None, timeout: float | None = None,
+                                    completion_grace: float = 0.0) -> tuple[subprocess.CompletedProcess[str], bool]:
     """Run a CLI while retaining partial output and watching game completion."""
-    process = subprocess.Popen(
-        list(command),
-        stdin=subprocess.PIPE if input_text is not None else None,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        cwd=cwd,
-        start_new_session=True,
-    )
+    process = subprocess.Popen(list(command), stdin=subprocess.PIPE if input_text is not None else None,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=cwd,
+                               start_new_session=True)
     started_at = time.monotonic()
     completion_seen_at: float | None = None
     stdout_parts: list[str] = []
@@ -66,9 +49,7 @@ def run_process_until_game_complete(
     live_trace_path = os.environ.get("AGENT_LIVE_TRACE_PATH")
     live_trace_lock = threading.Lock()
 
-    def collect_stream(stream,
-                       target: list[str],
-                       stream_name: str) -> None:
+    def collect_stream(stream, target: list[str], stream_name: str) -> None:
         if stream is None:
             return
 
@@ -83,16 +64,8 @@ def run_process_until_game_complete(
                         else:
                             trace_file.write(f"harness_stderr: {line}")
 
-    stdout_thread = threading.Thread(
-        target=collect_stream,
-        args=(process.stdout, stdout_parts, "stdout"),
-        daemon=True,
-    )
-    stderr_thread = threading.Thread(
-        target=collect_stream,
-        args=(process.stderr, stderr_parts, "stderr"),
-        daemon=True,
-    )
+    stdout_thread = threading.Thread(target=collect_stream, args=(process.stdout, stdout_parts, "stdout"), daemon=True)
+    stderr_thread = threading.Thread(target=collect_stream, args=(process.stderr, stderr_parts, "stderr"), daemon=True)
     stdout_thread.start()
     stderr_thread.start()
 
@@ -143,21 +116,12 @@ def run_process_until_game_complete(
         process.stderr.close()
 
     if timed_out:
-        raise subprocess.TimeoutExpired(
-            list(command),
-            timeout,
-            output=stdout,
-            stderr=stderr,
-        )
+        raise subprocess.TimeoutExpired(list(command), timeout, output=stdout, stderr=stderr)
 
-    return (
-        subprocess.CompletedProcess(list(command), returncode, stdout, stderr),
-        terminated_after_game,
-    )
+    return (subprocess.CompletedProcess(list(command), returncode, stdout, stderr), terminated_after_game,)
 
 
-def load_model_connection(harness: str,
-                          model_connection_path: str | Path | None = None) -> dict[str, Any] | None:
+def load_model_connection(harness: str, model_connection_path: str | Path | None = None) -> dict[str, Any] | None:
     """Load and validate the resolved model connection for one harness.
 
     Args:
@@ -189,9 +153,7 @@ def load_model_connection(harness: str,
     return connection
 
 
-def resolve_runtime_model(model_connection: dict[str, Any] | None,
-                          model: str | None,
-                          harness_name: str,
+def resolve_runtime_model(model_connection: dict[str, Any] | None, model: str | None, harness_name: str,
                           required: bool = True) -> str | None:
     """Select the model identifier used by an external-agent harness.
 
@@ -237,8 +199,7 @@ def model_connection_environment(model_connection: dict[str, Any] | None) -> dic
     return {key: str(value) if value is not None else None for key, value in environment.items()}
 
 
-def mcp_environment(mcp_url: str,
-                    include_pythonpath: bool = False) -> dict[str, str]:
+def mcp_environment(mcp_url: str, include_pythonpath: bool = False) -> dict[str, str]:
     """Build the environment passed to the container-side MCP bridge.
 
     Args:
@@ -305,31 +266,30 @@ def redact_sensitive(text: str) -> str:
         captured output with known credential formats redacted
     """
 
-    redacted = re.sub(r"sk-or-[A-Za-z0-9._-]+",
-                      "[REDACTED]",
-                      text)
-    redacted = re.sub(r"sk-[A-Za-z0-9._-]+",
-                      "[REDACTED]",
-                      redacted)
-    prefix_patterns = (
-        r"(?i)(api key:\s*)\S+",
-        r"(?i)(OPENROUTER_API_KEY=)\S+",
-        r"(?i)(OPENAI_API_KEY=)\S+",
-        r"(?i)(ANTHROPIC_API_KEY=)\S+",
-        r"(?i)(--token\s+)\S+",
-        r"(?i)(--openrouter-api-key\s+)\S+",
-    )
+    redacted = re.sub(r"sk-or-[A-Za-z0-9._-]+", "[REDACTED]", text)
+    redacted = re.sub(r"sk-[A-Za-z0-9._-]+", "[REDACTED]", redacted)
+    prefix_patterns = (r"(?i)(api key:\s*)\S+", r"(?i)(OPENROUTER_API_KEY=)\S+", r"(?i)(OPENAI_API_KEY=)\S+",
+                       r"(?i)(ANTHROPIC_API_KEY=)\S+", r"(?i)(--token\s+)\S+", r"(?i)(--openrouter-api-key\s+)\S+",
+                       )
 
     for pattern in prefix_patterns:
-        redacted = re.sub(pattern,
-                          lambda match: f"{match.group(1)}[REDACTED]",
-                          redacted)
+        redacted = re.sub(pattern, lambda match: f"{match.group(1)}[REDACTED]", redacted)
 
     return redacted
 
 
-def deep_merge_dicts(base: dict[str, Any],
-                     patch: dict[str, Any]) -> dict[str, Any]:
+def warn_model_generation_config(model_spec: dict[str, Any]) -> None:
+    """Warn that vanilla request settings do not configure external harnesses."""
+    import warnings
+
+    config = model_spec.get("model_config") or {}
+    if isinstance(config, dict) and any(config.get(key) is not None
+                                        for key in ("extra_body", "temperature", "max_tokens", "top_p")):
+        warnings.warn("Model registry generation settings are not forwarded to external harnesses; "
+                      "set reasoning_effort and supported sampling controls in agent_config instead", stacklevel=2)
+
+
+def deep_merge_dicts(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     """Merge a nested configuration patch without modifying either input.
 
     Args:
@@ -351,9 +311,7 @@ def deep_merge_dicts(base: dict[str, Any],
     return merged
 
 
-def write_text_artifact(output_dir: str | Path | None,
-                        filename: str,
-                        content: str) -> Path | None:
+def write_text_artifact(output_dir: str | Path | None, filename: str, content: str) -> Path | None:
     """Write one text artifact when adapter output is enabled.
 
     Args:

@@ -7,19 +7,13 @@ import re
 from pathlib import Path
 from typing import Any
 
-from clemagents.transcribe_agent_loop.utils import (
-    format_event_content,
-    load_agent_loop,
-    write_html,
-)
-
+from clemagents.transcribe_agent_loop.utils import (format_event_content, load_agent_loop, write_html)
+from clemagents.adapters.traces.schema import normalize_agent_trace
 
 module_logger = logging.getLogger(__name__)
 
 MAX_DIAGNOSTIC_CHARACTERS = 20_000
-DATA_URL_PATTERN = re.compile(
-    r"data:(?P<mime>image|audio|video)/[^;,\s]+;base64,[A-Za-z0-9+/=]+"
-)
+DATA_URL_PATTERN = re.compile(r"data:(?P<mime>image|audio|video)/[^;,\s]+;base64,[A-Za-z0-9+/=]+")
 
 CSS = """
 body {
@@ -151,21 +145,19 @@ summary {
 }
 """
 
-EVENT_LABELS = {
-    "instruction": "Instruction",
-    "tool_definitions": "Tool definitions",
-    "message": "Message",
-    "reasoning": "Reasoning",
-    "tool_preamble": "Tool preamble",
-    "assistant_text": "Assistant text",
-    "assistant_output": "Assistant output",
-    "tool_call": "Tool call",
-    "tool_result": "Tool result",
-    "trace_warning": "Trace warning",
-    "model_request": "Model request",
-    "model_response": "Model response",
-    "error": "Error"
-}
+EVENT_LABELS = {"instruction": "Instruction",
+                "tool_definitions": "Tool definitions",
+                "message": "Message",
+                "reasoning": "Reasoning",
+                "tool_preamble": "Tool preamble",
+                "assistant_text": "Assistant text",
+                "assistant_output": "Assistant output",
+                "tool_call": "Tool call",
+                "tool_result": "Tool result",
+                "trace_warning": "Trace warning",
+                "model_request": "Model request",
+                "model_response": "Model response",
+                "error": "Error"}
 
 
 def build_agent_loop_html(agent_loop: dict[str, Any], source_path: Path) -> str:
@@ -179,44 +171,28 @@ def build_agent_loop_html(agent_loop: dict[str, Any], source_path: Path) -> str:
         complete HTML document
     """
 
-    backend = agent_loop.get("backend", "unknown harness")
+    agent_loop = normalize_agent_trace(agent_loop)
+    backend = format_event_content(agent_loop["backend"])
     schema_version = agent_loop.get("schema_version", "unknown")
     events = agent_loop.get("events", [])
 
-    if not isinstance(events, list):
-        raise ValueError(f"Agent-loop events must be a list: {source_path}")
-
-    semantic_events = [event for event in events
-                       if isinstance(event, dict)
-                       and event.get("type") not in {"model_request", "model_response", "tool_definitions"}]
-    tool_definition_events = [event for event in events
-                              if isinstance(event, dict)
-                              and event.get("type") == "tool_definitions"]
+    dialogue_events = [event for event in events
+                       if isinstance(event, dict) and event.get("type") not in {"model_request", "model_response", "tool_definitions"}]
+    tool_definition_events = [event for event in events if isinstance(event, dict) and event.get("type") == "tool_definitions"]
     protocol_events = [event for event in events
-                       if isinstance(event, dict)
-                       and event.get("type") in {"model_request", "model_response"}]
+                       if isinstance(event, dict) and event.get("type") in {"model_request", "model_response"}]
     title = f"Agent Loop Transcript — {backend}"
-    html_parts = [
-        "<!DOCTYPE html>",
-        "<html>",
-        "<head>",
-        '<meta charset="utf-8">',
-        f"<title>{title}</title>",
-        f"<style>{CSS}</style>",
-        "</head>",
-        "<body>",
-        '<main class="page">',
-        '<section class="top-info">',
-        f"<h1>{title}</h1>",
-        f"<p>Schema version {schema_version} · {len(semantic_events)} dialogue events · {source_path.name}</p>",
-        "</section>",
-        _render_capture(agent_loop.get("capture", {})),
-        _render_trace_metadata(agent_loop),
-        _render_tool_configuration(tool_definition_events)
-    ]
+    html_parts = ["<!DOCTYPE html>", "<html>", "<head>", '<meta charset="utf-8">', f"<title>{title}</title>",
+                  f"<style>{CSS}</style>", "</head>", "<body>", '<main class="page">', '<section class="top-info">',
+                  f"<h1>{title}</h1>",
+                  f"<p>Schema version {schema_version} · {len(dialogue_events)} dialogue events · {format_event_content(source_path.name)}</p>",
+                  "</section>",
+                  _render_capture(agent_loop.get("capture", {})),
+                  _render_trace_metadata(agent_loop),
+                  _render_tool_configuration(tool_definition_events)]
 
-    if semantic_events:
-        html_parts.extend(_render_event(event) for event in semantic_events)
+    if dialogue_events:
+        html_parts.extend(_render_event(event) for event in dialogue_events)
     else:
         html_parts.append('<section class="event"><p class="empty">No agent-loop events were recorded</p></section>')
 
@@ -261,14 +237,12 @@ def _render_capture(capture: Any) -> str:
     entries = []
 
     for name, status in capture.items():
-        entries.append(f"<li><strong>{name}</strong>: {format_event_content(status)}</li>")
+        entries.append(f"<li><strong>{format_event_content(name)}</strong>: {format_event_content(status)}</li>")
 
-    return (
-        '<details class="capture" open>'
-        '<summary>Capture metadata</summary>'
-        f"<ul>{''.join(entries)}</ul>"
-        "</details>"
-    )
+    return ('<details class="capture" open>'
+            '<summary>Capture metadata</summary>'
+            f"<ul>{''.join(entries)}</ul>"
+            "</details>")
 
 
 def _render_tool_configuration(events: list[dict[str, Any]]) -> str:
@@ -279,14 +253,12 @@ def _render_tool_configuration(events: list[dict[str, Any]]) -> str:
 
     tool_sets = [event.get("tools", []) for event in events]
 
-    return (
-        '<details class="capture">'
-        '<summary>Available tools sent with the model request</summary>'
-        '<p class="event-note">This is the tool inventory or structured tool configuration captured '
-        'by the harness. It is request configuration, not natural-language prompt text.</p>'
-        f'<pre>{format_event_content(tool_sets[0] if len(tool_sets) == 1 else tool_sets)}</pre>'
-        '</details>'
-    )
+    return ('<details class="capture">'
+            '<summary>Available tools sent with the model request</summary>'
+            '<p class="event-note">This is the tool inventory or structured tool configuration captured '
+            'by the harness. It is request configuration, not natural-language prompt text.</p>'
+            f'<pre>{format_event_content(tool_sets[0] if len(tool_sets) == 1 else tool_sets)}</pre>'
+            '</details>')
 
 
 def _render_trace_metadata(agent_loop: dict[str, Any]) -> str:
@@ -298,12 +270,10 @@ def _render_trace_metadata(agent_loop: dict[str, Any]) -> str:
         value = agent_loop.get(key)
 
         if value:
-            sections.append(
-                '<details class="capture">'
-                f'<summary>{label}</summary>'
-                f'<pre>{format_event_content(value)}</pre>'
-                '</details>'
-            )
+            sections.append('<details class="capture">'
+                            f'<summary>{label}</summary>'
+                            f'<pre>{format_event_content(value)}</pre>'
+                            '</details>')
 
     return "".join(sections)
 
@@ -318,52 +288,43 @@ def _render_protocol_appendix(events: list[dict[str, Any]]) -> str:
 
     for event in events:
         event_type = str(event.get("type", "unknown"))
-        turn = event.get("turn", "unknown")
-        status = f" · status {event['status']}" if event.get("status") is not None else ""
-        records.append(
-            '<details>'
-            f'<summary>{EVENT_LABELS.get(event_type, event_type)} · turn {turn}{status}</summary>'
-            f'<pre>{format_event_content(_protocol_event_preview(event))}</pre>'
-            '</details>'
-        )
+        turn = format_event_content(event.get("turn", "unknown"))
+        status = f" · status {format_event_content(event['status'])}" if event.get("status") is not None else ""
+        records.append('<details>'
+                       f'<summary>{EVENT_LABELS.get(event_type, event_type)} · turn {turn}{status}</summary>'
+                       f'<pre>{format_event_content(_protocol_event_preview(event))}</pre>'
+                       '</details>')
 
-    return (
-        '<details class="capture">'
-        f'<summary>Raw API transport records ({len(events)})</summary>'
-        '<p class="event-note">These are proxy-captured HTTP request bodies and streamed response '
-        'events. They are retained for diagnostics and are not dialogue turns.</p>'
-        f'{"".join(records)}'
-        '</details>'
-    )
+    return ('<details class="capture">'
+            f'<summary>Raw API transport records ({len(events)})</summary>'
+            '<p class="event-note">These are proxy-captured HTTP request bodies and streamed response '
+            'events. They are retained for diagnostics and are not dialogue turns.</p>'
+            f'{"".join(records)}'
+            '</details>')
 
 
 def _render_event(event: Any) -> str:
     """Render one standardized agent-loop event."""
 
-    if not isinstance(event, dict):
-        event = {"type": "error", "content": f"Invalid event: {event!r}"}
-
     event_type = str(event.get("type", "unknown"))
     event_classes = [event_type.replace("_", "-")]
 
-    if event.get("agent"):
+    if event.get("agent") or event.get("agent_id"):
         event_classes.append("agent-event")
 
-    event_class = " ".join(event_classes)
-    label = EVENT_LABELS.get(event_type, event_type.replace("_", " ").title())
+    event_class = format_event_content(" ".join(event_classes))
+    label = format_event_content(EVENT_LABELS.get(event_type, event_type.replace("_", " ").title()))
 
     details = _event_details(event)
     body = _event_body(event)
 
-    return (
-        f'<section class="event {event_class}">'
-        '<header class="event-header">'
-        f'<span class="event-title">{label}</span>'
-        f'<span class="event-meta">{details}</span>'
-        "</header>"
-        f'<div class="event-body">{body}</div>'
-        "</section>"
-    )
+    return (f'<section class="event {event_class}">'
+            '<header class="event-header">'
+            f'<span class="event-title">{label}</span>'
+            f'<span class="event-meta">{details}</span>'
+            "</header>"
+            f'<div class="event-body">{body}</div>'
+            "</section>")
 
 
 def _event_details(event: dict[str, Any]) -> str:
@@ -371,20 +332,8 @@ def _event_details(event: dict[str, Any]) -> str:
 
     parts = []
 
-    for key in (
-        "sequence",
-        "turn",
-        "agent",
-        "kind",
-        "model",
-        "role",
-        "name",
-        "call_id",
-        "reward",
-        "done",
-        "source",
-        "status",
-    ):
+    for key in ("sequence", "turn", "agent", "agent_id", "parent_call_id", "kind", "model", "role", "name",
+                "call_id", "reward", "done", "source", "status", "is_error"):
         value = event.get(key)
 
         if value is not None:
@@ -400,37 +349,34 @@ def _event_body(event: dict[str, Any]) -> str:
 
     if event_type in {"model_request", "model_response"}:
         raw = format_event_content(event.get("raw", ""))
-        note = (
-            "New instructions, messages, and tool results supplied to the model "
-            "are shown in the following blocks."
-            if event_type == "model_request"
-            else "The meaningful generated reasoning, text, and tool calls are shown in the following blocks."
-        )
-        return (
-            f'<p class="event-note">{note}</p>'
-            '<details><summary>Full raw snapshot</summary>'
-            f"<pre>{raw}</pre>"
-            "</details>"
-        )
+        note = ("New instructions, messages, and tool results supplied to the model "
+                "are shown in the following blocks." if event_type == "model_request" else
+                "The meaningful generated reasoning, text, and tool calls are shown in the following blocks.")
+        return (f'<p class="event-note">{note}</p>'
+                '<details><summary>Full raw snapshot</summary>'
+                f"<pre>{raw}</pre>"
+                "</details>")
 
     if event_type == "tool_call":
-        content = {
-            "name": event.get("name"),
-            "arguments": event.get("arguments")
-        }
+        content = {"name": event.get("name"), "arguments": event.get("arguments", event.get("content"))}
     elif event_type == "tool_definitions":
         content = event.get("tools", [])
     else:
-        content = event.get("content", event.get("payload", {}))
+        content = event.get("content", event.get("payload", event))
 
     body = f"<pre>{format_event_content(_redact_media_payloads(content))}</pre>"
 
-    if "payload" in event and event_type not in {"tool_call", "tool_definitions"}:
-        body += (
-            '<details><summary>Full structured payload</summary>'
-            f"<pre>{format_event_content(_redact_media_payloads(event['payload']))}</pre>"
-            "</details>"
-        )
+    if "payload" in event and event_type != "tool_definitions":
+        body += ('<details><summary>Full structured payload</summary>'
+                 f"<pre>{format_event_content(_redact_media_payloads(event['payload']))}</pre>"
+                 "</details>")
+
+    known_fields = {"sequence", "turn", "type", "content", "payload", "arguments", "tools", "agent", "agent_id",
+                    "parent_call_id", "kind", "model", "role", "name", "call_id", "reward", "done", "source",
+                    "status", "is_error"}
+    if event.keys() - known_fields:
+        body += ('<details><summary>Additional event fields</summary>'
+                 f'<pre>{format_event_content(_redact_media_payloads(event))}</pre></details>')
 
     return body
 
@@ -439,12 +385,7 @@ def _protocol_event_preview(event: dict[str, Any]) -> str:
     """Return a bounded, text-only diagnostic representation of wire traffic."""
 
     if event.get("type") == "model_request" and event.get("payload"):
-        value = json.dumps(
-            _redact_media_payloads(event["payload"]),
-            indent=2,
-            ensure_ascii=False,
-            default=str,
-        )
+        value = json.dumps(_redact_media_payloads(event["payload"]), indent=2, ensure_ascii=False, default=str)
     else:
         raw = event.get("raw", "")
 
@@ -452,22 +393,14 @@ def _protocol_event_preview(event: dict[str, Any]) -> str:
             raw = str(raw)
 
         if event.get("content_encoding") == "gzip" or "\x00" in raw:
-            return (
-                f"[compressed or binary wire body omitted; "
-                f"{len(raw):,} captured characters]"
-            )
+            return (f"[compressed or binary wire body omitted; "
+                    f"{len(raw):,} captured characters]")
 
-        value = DATA_URL_PATTERN.sub(
-            lambda match: f"[embedded {match.group('mime')} data omitted]",
-            raw,
-        )
+        value = DATA_URL_PATTERN.sub(lambda match: f"[embedded {match.group('mime')} data omitted]", raw)
 
     if len(value) > MAX_DIAGNOSTIC_CHARACTERS:
         omitted = len(value) - MAX_DIAGNOSTIC_CHARACTERS
-        value = (
-            value[:MAX_DIAGNOSTIC_CHARACTERS]
-            + f"\n\n[diagnostic body truncated; {omitted:,} characters omitted]"
-        )
+        value = (value[:MAX_DIAGNOSTIC_CHARACTERS] + f"\n\n[diagnostic body truncated; {omitted:,} characters omitted]")
 
     return value
 
@@ -476,19 +409,13 @@ def _redact_media_payloads(value: Any) -> Any:
     """Replace embedded media bytes with concise typed placeholders."""
 
     if isinstance(value, dict):
-        return {
-            key: _redact_media_payloads(item)
-            for key, item in value.items()
-        }
+        return {key: _redact_media_payloads(item) for key, item in value.items()}
 
     if isinstance(value, list):
         return [_redact_media_payloads(item) for item in value]
 
     if isinstance(value, str):
-        return DATA_URL_PATTERN.sub(
-            lambda match: f"[embedded {match.group('mime')} data omitted]",
-            value,
-        )
+        return DATA_URL_PATTERN.sub(lambda match: f"[embedded {match.group('mime')} data omitted]", value)
 
     return value
 
@@ -496,14 +423,8 @@ def _redact_media_payloads(value: Any) -> Any:
 def main() -> None:
     """Parse command-line arguments and render standardized agent loops."""
 
-    parser = argparse.ArgumentParser(
-        description="Create readable HTML transcripts from agent_loop.json files"
-    )
-    parser.add_argument("-r",
-                        "--results_dir",
-                        "--results-dir",
-                        default="results/external-agents",
-                        dest="results_dir",
+    parser = argparse.ArgumentParser(description="Create readable HTML transcripts from agent_loop.json files")
+    parser.add_argument("-r", "--results_dir", "--results-dir", default="results/external-agents", dest="results_dir",
                         help="Results directory scanned recursively")
     args = parser.parse_args()
     generated, failures = build_agent_loop_transcripts(args.results_dir)

@@ -108,8 +108,7 @@ RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel && \
         wordfreq \
         wordninja
 
-# Keep OpenClaw reproducible across image rebuilds. Version 2026.8.11 is the
-# version recorded in the last known-successful OpenRouter benchmark traces. first episodes ran 2026.6.11
+# pin openclaw across sandbox rebuilds
 RUN npm install -g @anthropic-ai/claude-code @openai/codex openclaw@2026.8.1
 # install the native search provider separately, pinned to the openclaw release
 RUN npm install -g --omit=peer @openclaw/duckduckgo-plugin@2026.8.1 && \

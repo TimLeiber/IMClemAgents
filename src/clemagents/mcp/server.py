@@ -6,12 +6,8 @@ import uvicorn
 from openenv.core import create_app
 
 from clemcore.clemgame.callbacks.base import GameBenchmarkCallbackList
-from clemcore.clemgame.callbacks.files import (
-    ExperimentFileSaver,
-    InstanceFileSaver,
-    InteractionsFileSaver,
-    ResultsFolder
-)
+from clemcore.clemgame.callbacks.files import (ExperimentFileSaver, InstanceFileSaver, InteractionsFileSaver,
+                                               ResultsFolder)
 from clemcore.clemgame.envs.openenv.models import ClemGameAction, ClemGameObservation
 from clemagents.mcp.environment import ClemGameMCPEnvironment, SelectableClemGameEnvironment
 
@@ -30,14 +26,11 @@ def _configure_server_logging(quiet: bool) -> None:
         logging.disable(logging.INFO)
 
     fastmcp_logger = logging.getLogger("fastmcp.server.server")
-    if not any(isinstance(item, _SuppressFastMCPToolCallErrors)
-               for item in fastmcp_logger.filters):
+    if not any(isinstance(item, _SuppressFastMCPToolCallErrors) for item in fastmcp_logger.filters):
         fastmcp_logger.addFilter(_SuppressFastMCPToolCallErrors())
 
 
-def _report_startup_status(startup_status_queue,
-                           state: str,
-                           **details) -> None:
+def _report_startup_status(startup_status_queue, state: str, **details) -> None:
     """Send best-effort MCP-server startup state to the parent process."""
 
     if startup_status_queue is None:
@@ -49,9 +42,7 @@ def _report_startup_status(startup_status_queue,
         pass
 
 
-def result_run_dir_name(agent_name: str,
-                        registry_path: str | Path,
-                        learner_agent: str = "player_0",
+def result_run_dir_name(agent_name: str, registry_path: str | Path, learner_agent: str = "player_0",
                         env_agents: dict[str, str] | None = None) -> str:
     """Return the deterministic clembench result directory for a player set."""
 
@@ -62,9 +53,7 @@ def result_run_dir_name(agent_name: str,
     matches = [entry for entry in registry if entry["agent_name"] == agent_name]
     if not matches:
         known_agents = [entry["agent_name"] for entry in registry]
-        raise ValueError(
-            f"Unknown agent '{agent_name}'. Known agents: {known_agents}"
-        )
+        raise ValueError(f"Unknown agent '{agent_name}'. Known agents: {known_agents}")
 
     spec = matches[0]
     model_name = spec.get("agent_config", {}).get("model")
@@ -83,20 +72,11 @@ def result_run_dir_name(agent_name: str,
     return "--".join(player_name for _, player_name in ordered_players)
 
 
-def run_clem_mcp_server(game_name: str,
-                        agent_name: str,
-                        registry_path: str | Path,
-                        learner_agent: str = "player_0",
-                        env_agents: dict[str, str] | None = None,
-                        game_instance_split: str | None = None,
-                        instances_filename: str | None = None,
-                        single_pass: bool = False,
-                        gen_args: dict | None = None,
-                        results_dir: str | Path | None = None,
-                        run_dir: str | None = None,
-                        completion_path: str | Path | None = None,
-                        startup_status_queue=None,
-                        port: int = 8001,
+def run_clem_mcp_server(game_name: str, agent_name: str, registry_path: str | Path, learner_agent: str = "player_0",
+                        env_agents: dict[str, str] | None = None, game_instance_split: str | None = None,
+                        instances_filename: str | None = None, single_pass: bool = False, gen_args: dict | None = None,
+                        results_dir: str | Path | None = None, run_dir: str | None = None,
+                        completion_path: str | Path | None = None, startup_status_queue=None, port: int = 8001,
                         quiet: bool = False) -> None:
     """Create and run the host-side MCP server for a clembench run.
 
@@ -128,52 +108,38 @@ def run_clem_mcp_server(game_name: str,
 
     _configure_server_logging(quiet=quiet)
 
-    # ----- step 1 -----
+    # step 1
     # derive the result directory name from the configured players when omitted
     if run_dir is None:
-        run_dir = result_run_dir_name(
-            agent_name=agent_name,
-            registry_path=registry_path,
-            learner_agent=learner_agent,
-            env_agents=env_agents,
-        )
+        run_dir = result_run_dir_name(agent_name=agent_name, registry_path=registry_path, learner_agent=learner_agent,
+                                      env_agents=env_agents)
 
-        # ----- step 2 -----
+        # step 2
         # collect the callbacks that make clembench write episode records to disk
         callbacks = None
 
         if results_dir is not None:
             # explicitly infer the results folder and the instance folder via game id
             results_folder = ResultsFolder(Path(results_dir), run_dir)
-            callbacks = GameBenchmarkCallbackList([
-                InstanceFileSaver(results_folder),
-                ExperimentFileSaver(results_folder),
-                InteractionsFileSaver(results_folder)
-            ])
+            callbacks = GameBenchmarkCallbackList([InstanceFileSaver(results_folder),
+                                                   ExperimentFileSaver(results_folder),
+                                                   InteractionsFileSaver(results_folder)])
 
-        # ----- step 3 -----
-        # define how OpenEnv builds an environment, called once per agent session
+        # step 3
+        # define how openenv builds an environment, called once per agent session
         def make_env():
-            base_env = SelectableClemGameEnvironment(game_name,
-                                                     instances_filename=instances_filename,
-                                                     game_instance_split=game_instance_split,
-                                                     single_pass=single_pass,
-                                                     learner_agent=learner_agent,
-                                                     env_agents=env_agents,
-                                                     gen_args=gen_args,
-                                                     callbacks=callbacks)
+            base_env = SelectableClemGameEnvironment(game_name, instances_filename=instances_filename,
+                                                     game_instance_split=game_instance_split, single_pass=single_pass,
+                                                     learner_agent=learner_agent, env_agents=env_agents,
+                                                     gen_args=gen_args, callbacks=callbacks)
 
-            return ClemGameMCPEnvironment(base_env,
-                                          completion_path=completion_path)
+            return ClemGameMCPEnvironment(base_env, completion_path=completion_path)
 
-        # ----- step 4 -----
-        # build the application exposing that environment over MCP
+        # step 4
+        # build the application exposing that environment over mcp
         _report_startup_status(startup_status_queue, "creating_application")
-        app = create_app(make_env,
-                         ClemGameAction,
-                         ClemGameObservation,
-                         env_name="clem_mcp_env")
+        app = create_app(make_env, ClemGameAction, ClemGameObservation, env_name="clem_mcp_env")
 
-        # expose the application to the host and Docker container
+        # expose the application to the host and docker container
         _report_startup_status(startup_status_queue, "starting_listener", port=port)
         uvicorn.run(app, host="0.0.0.0", port=port)

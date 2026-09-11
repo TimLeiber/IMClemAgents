@@ -6,10 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
-from clemagents.mcp.environment import (
-    SelectableClemGameEnvironment,
-    _observation_to_dict,
-)
+from clemagents.mcp.environment import (SelectableClemGameEnvironment, _observation_to_dict)
 from clemcore.clemgame.envs.openenv.models import ClemGameAction
 from clemcore.clemgame.master import GameState, Outcome
 from clemcore.clemgame.envs.pettingzoo.master import GameMasterEnv
@@ -18,15 +15,13 @@ from clemcore.clemgame.registry import GameSpec
 
 
 class TestExternalAgentMCPEnvironment(unittest.TestCase):
+
     def test_full_environment_selects_instance_and_finalizes_callbacks(self):
         with tempfile.TemporaryDirectory() as directory:
             game_path = Path(directory)
             (game_path / "in").mkdir()
-            (game_path / "in" / "instances.json").write_text(json.dumps({
-                "experiments": [{"name": "fixture", "game_instances": [
-                    {"game_id": 1}, {"game_id": 2},
-                ]}],
-            }))
+            (game_path / "in" / "instances.json").write_text(json.dumps({"experiments": [{"name": "fixture",
+                                                                                          "game_instances": [{"game_id": 1}, {"game_id": 2}]}]}))
             spec = GameSpec(game_name="fixture", game_path=str(game_path), players=1)
             player = SimpleNamespace(name="Player", model=SimpleNamespace(name="fixture"))
             master = MagicMock()
@@ -65,104 +60,53 @@ class TestExternalAgentMCPEnvironment(unittest.TestCase):
                     environment.close()
                 callbacks.on_benchmark_end.assert_called_once()
 
-    def _environment(self,
-                     displayed_context,
-                     stored_context,
-                     returned_context,
-                     outcome,
-                     error=None):
+    def _environment(self, displayed_context, stored_context, returned_context, outcome, error=None):
         player = SimpleNamespace(name="Player 1")
-        game_master = SimpleNamespace(
-            current_player=player,
-            state=SimpleNamespace(outcome=outcome, error=error),
-            context_for_player={player.name: stored_context},
-            get_context_for=lambda selected_player: displayed_context,
-        )
+        game_master = SimpleNamespace(current_player=player, state=SimpleNamespace(outcome=outcome, error=error),
+                                      context_for_player={player.name: stored_context},
+                                      get_context_for=lambda selected_player: displayed_context)
         game_environment = MagicMock()
         game_environment.unwrapped.game_master = game_master
         game_environment.agent_selection = "player_0"
-        game_environment.last.return_value = (
-            returned_context,
-            -1.0 if outcome == Outcome.ABORTED else 1.0,
-            True,
-            False,
-            {},
-        )
-        environment = SelectableClemGameEnvironment.__new__(
-            SelectableClemGameEnvironment
-        )
+        game_environment.last.return_value = (returned_context, -1.0 if outcome == Outcome.ABORTED else 1.0, True,
+                                              False, {},
+                                              )
+        environment = SelectableClemGameEnvironment.__new__(SelectableClemGameEnvironment)
         environment._game_env = game_environment
         environment._learner_agent = "player_0"
         environment._state = SimpleNamespace(step_count=0)
         return environment
 
     def test_stale_terminal_context_is_replaced_with_outcome_and_reason(self):
-        displayed_context = {
-            "role": "user",
-            "content": "Initial prompt\n\nInitial game message",
-        }
-        stored_context = {
-            "role": "user",
-            "content": "Initial game message",
-        }
+        displayed_context = {"role": "user", "content": "Initial prompt\n\nInitial game message"}
+        stored_context = {"role": "user", "content": "Initial game message"}
         error = SimpleNamespace(reason="The response format was invalid.")
-        environment = self._environment(
-            displayed_context,
-            stored_context,
-            stored_context,
-            Outcome.ABORTED,
-            error,
-        )
+        environment = self._environment(displayed_context, stored_context, stored_context, Outcome.ABORTED, error)
 
         observation = environment.step(ClemGameAction(response="bad response"))
 
-        self.assertEqual(
-            observation.context,
-            {
-                "role": "user",
-                "content": (
-                    "The game ended before normal completion.\n"
-                    "Reason: The response format was invalid."
-                ),
-            },
-        )
+        self.assertEqual(observation.context, {"role": "user",
+                                               "content": ("The game ended before normal completion.\n"
+                                                           "Reason: The response format was invalid.")})
         self.assertEqual(observation.metadata["outcome"], "aborted")
-        self.assertEqual(
-            observation.metadata["terminal_reason"],
-            "The response format was invalid.",
-        )
+        self.assertEqual(observation.metadata["terminal_reason"], "The response format was invalid.")
         self.assertTrue(observation.metadata["terminal_context_normalized"])
 
     def test_unsuccessful_normal_completion_is_not_called_a_failure(self):
         context = {"role": "user", "content": "Final clue"}
-        environment = self._environment(
-            context,
-            context,
-            context,
-            Outcome.FAILURE,
-        )
+        environment = self._environment(context, context, context, Outcome.FAILURE)
 
         observation = environment.step(ClemGameAction(response="wrong answer"))
 
-        self.assertEqual(
-            observation.context,
-            {
-                "role": "user",
-                "content": "The game is complete. The objective was not achieved.",
-            },
-        )
+        self.assertEqual(observation.context, {"role": "user",
+                                               "content": "The game is complete. The objective was not achieved."})
         self.assertEqual(observation.metadata["outcome"], "failure")
         self.assertTrue(observation.metadata["terminal_context_normalized"])
 
     def test_genuine_terminal_context_is_preserved(self):
         initial_context = {"role": "user", "content": "Initial game message"}
         final_context = {"role": "user", "content": "You solved the game."}
-        environment = self._environment(
-            initial_context,
-            initial_context,
-            final_context,
-            Outcome.SUCCESS,
-        )
+        environment = self._environment(initial_context, initial_context, final_context, Outcome.SUCCESS)
 
         observation = environment.step(ClemGameAction(response="final response"))
 
@@ -193,7 +137,7 @@ class TestExternalAgentMCPEnvironment(unittest.TestCase):
         env = environment._game_env
         env.agent_selection = None
         env.observe.return_value = context
-        # PettingZoo removes the per-agent dictionaries during cleanup.
+        # pettingzoo removes the per-agent dictionaries during cleanup
         env.rewards = env.terminations = env.truncations = env.infos = {}
 
         observation = environment.step(ClemGameAction(response="answer"))
@@ -311,26 +255,14 @@ class TestExternalAgentMCPEnvironment(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             image_path = Path(directory) / "location.png"
             image_path.write_bytes(image_bytes)
-            observation = SimpleNamespace(
-                context={
-                    "role": "user",
-                    "content": "Identify this location.",
-                    "image": [str(image_path)],
-                },
-                reward=None,
-                done=False,
-                metadata={},
-            )
+            observation = SimpleNamespace(context={"role": "user",
+                                                   "content": "Identify this location.",
+                                                   "image": [str(image_path)]}, reward=None, done=False, metadata={})
             result = _observation_to_dict(observation)
 
         self.assertEqual(result["context"]["content"], "Identify this location.")
-        self.assertEqual(
-            result["context"]["image"],
-            [{
-                "data": base64.b64encode(image_bytes).decode("ascii"),
-                "mimeType": "image/png",
-            }],
-        )
+        self.assertEqual(result["context"]["image"], [{"data": base64.b64encode(image_bytes).decode("ascii"),
+                                                       "mimeType": "image/png"}])
 
 
 if __name__ == "__main__":
