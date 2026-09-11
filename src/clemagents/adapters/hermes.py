@@ -1,0 +1,532 @@
+from .traces.hermes import parse_hermes_agent_trace
+from . import model_connection as connections
+import json
+import re
+import subprocess
+from pathlib import Path
+from typing import Any
+
+from clemagents.adapters.base import AgentRunResult, ExternalAgentHarness
+from clemagents.adapters.openai_compatible_proxy import proxy_for_model_connection
+from clemagents.adapters.utils import (
+    GAME_MCP_SERVER_NAME,
+    load_model_connection,
+    mcp_environment,
+    model_connection_environment,
+    new_game_completion_path,
+    read_game_completion,
+    redact_sensitive,
+    resolve_runtime_model,
+    run_process_until_game_complete,
+    temporary_environment,
+    write_text_artifact,
+)
+
+
+class HermesHarness(ExternalAgentHarness):
+    """Run Hermes Agent through the Hermes CLI.
+
+    The harness registers the container-side MCP bridge, enables detailed
+    trace output, runs one Hermes chat, and exports its session artifacts.
+    """
+
+
+    @classmethod
+    def resolve_model_connection(cls, clem_model: str) -> dict[str, Any]:
+        return resolve_clem_model_for_hermes(clem_model)
+
+    def __init__(self,
+                 model: str | None = None,
+                 clem_model: str | None = None,
+                 provider: str = "openrouter",
+                 mcp_url: str = "http://host.docker.internal:8001/mcp",
+                 max_turns: int = 20,
+                 yolo: bool = True,
+                 reasoning_effort: str | None = None,
+                 model_connection_path: str | None = None,
+                 trace_model_io: bool = True):
+        """Configure the Hermes harness.
+
+        Args:
+            model: model identifier passed directly to Hermes
+            clem_model: clembench model resolved by the outer pipeline
+            provider: Hermes model provider
+            mcp_url: URL forwarded to the container-side MCP bridge
+            max_turns: maximum number of Hermes turns
+            yolo: whether to disable Hermes approval gates
+            reasoning_effort: model reasoning effort configured in Hermes
+            model_connection_path: optional resolved model-connection file
+            trace_model_io: whether to record model requests and responses
+        """
+
+        self.model = model or clem_model
+        self.clem_model = clem_model
+        self.provider = provider
+        self.mcp_url = mcp_url
+        self.max_turns = max_turns
+        self.yolo = yolo
+        self.reasoning_effort = reasoning_effort
+        self.trace_model_io = trace_model_io
+        self._model_connection = load_model_connection("hermes", model_connection_path)
+
+    @classmethod
+    def parse_agent_trace(cls,
+                          episode_dir: Path,
+                          metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Delegate Hermes-specific trace parsing to adapter utilities."""
+
+        return parse_hermes_agent_trace(episode_dir=episode_dir, metadata=metadata)
+
+    def run_episode(self,
+                    instruction: str,
+                    output_dir: Path | str | None = None) -> AgentRunResult:
+        completion_path = new_game_completion_path()
+        proxy = proxy_for_model_connection(self._model_connection,
+                                           completion_path,
+                                           include_openrouter=True,
+                                           trace_responses=self.trace_model_io,
+                                           trace_requests=self.trace_model_io)
+
+        if proxy is not None:
+            with proxy:
+                result = self._run_episode(
+                    instruction,
+                    output_dir,
+                    completion_path,
+                    proxy.base_url,
+                )
+                proxy_trace = redact_sensitive(proxy.captured_trace())
+                adapter_messages = result.artifacts.get("adapter_messages")
+
+                if proxy_trace and adapter_messages is not None:
+                    trace_path = Path(adapter_messages)
+                    trace_path.write_text(
+                        trace_path.read_text(encoding="utf-8") + "\n" + proxy_trace,
+                        encoding="utf-8"
+                    )
+
+                return result
+
+        return self._run_episode(instruction, output_dir, completion_path, None)
+
+    def _run_episode(self,
+                     instruction: str,
+                     output_dir: Path | str | None,
+                     completion_path: Path,
+                     proxied_base_url: str | None) -> AgentRunResult:
+        """Run one Hermes episode.
+
+        Args:
+            instruction: task instruction passed to Hermes
+            output_dir: optional directory for adapter artifacts
+
+        Returns:
+            the standardized Hermes run result
+        """
+
+        # ----- step 1 -----
+        # initialize metadata and resolve the runtime model
+        metadata = {
+            "adapter": "hermes",
+            "model": self.model,
+            "clem_model": self.clem_model,
+            "runtime_model": None,
+            "resolved_backend": (self._model_connection or {}).get("backend"),
+            "gateway_base_url": (self._model_connection or {}).get("base_url"),
+            "compatibility_proxy_base_url": proxied_base_url,
+            "tool_choice": (self._model_connection or {}).get("tool_choice"),
+            "request_body_overrides": (
+                (self._model_connection or {}).get("request_body_overrides") or {}
+            ),
+            "verify_tls": (self._model_connection or {}).get("verify_tls"),
+            "provider": self.provider,
+            "mcp_url": self.mcp_url,
+            "max_turns": self.max_turns,
+            "reasoning_effort": self.reasoning_effort,
+            "trace_model_io": self.trace_model_io,
+            "success": False,
+            "returncode": None,
+            "runtime_error": None,
+            "game_completed": False,
+            "terminated_after_game": False,
+            "tool_call_count_hint": 0,
+            "hermes_session_id": None,
+            "raw_reasoning_available": None,
+            "raw_reasoning_note": (
+                "Hermes raw reasoning is preserved only if present in "
+                "Hermes session export/log artifacts."
+            ),
+        }
+        artifacts = {}
+
+        try:
+            runtime_model = resolve_runtime_model(model_connection=self._model_connection,
+                                                  model=self.model,
+                                                  harness_name="HermesHarness")
+            metadata["runtime_model"] = runtime_model
+        except Exception as error:
+            metadata["runtime_error"] = str(error)
+            return AgentRunResult(success=False,
+                                  artifacts=artifacts,
+                                  metadata=metadata)
+
+        runtime_environment = model_connection_environment(self._model_connection)
+
+        runtime_provider = (
+            (self._model_connection or {}).get("provider") or self.provider
+        )
+        metadata["provider"] = runtime_provider
+        endpoint_variable = (
+            "OPENROUTER_BASE_URL" if runtime_provider == "openrouter"
+            else "OPENAI_BASE_URL"
+        )
+        if proxied_base_url is not None:
+            runtime_environment[endpoint_variable] = proxied_base_url
+
+        runtime_base_url = (
+            runtime_environment.get(endpoint_variable)
+            or (self._model_connection or {}).get("base_url")
+        )
+
+        # ----- step 2 -----
+        # build the MCP registration, trace configuration, and chat commands
+        bridge_environment = mcp_environment(self.mcp_url, include_pythonpath=True)
+        bridge_environment["GAME_COMPLETION_PATH"] = str(completion_path)
+        register_command = [
+            "hermes",
+            "mcp",
+            "add",
+            GAME_MCP_SERVER_NAME,
+            "--command",
+            "python",
+            "--env",
+            f"PYTHONPATH={bridge_environment['PYTHONPATH']}",
+            f"OPENENV_MCP_URL={bridge_environment['OPENENV_MCP_URL']}",
+            f"GAME_EXPERIMENT={bridge_environment.get('GAME_EXPERIMENT', '')}",
+            f"GAME_INSTANCE_ID={bridge_environment.get('GAME_INSTANCE_ID', '')}",
+            f"GAME_COMPLETION_PATH={completion_path}",
+            f"GAME_STARTED_PATH={bridge_environment.get('GAME_STARTED_PATH', '')}",
+            f"GAME_SESSION_PATH={bridge_environment.get('GAME_SESSION_PATH', '')}",
+            f"GAME_OBSERVATION_DIR={bridge_environment.get('GAME_OBSERVATION_DIR', '')}",
+            "--args",
+            "-m",
+            "clemagents.mcp.bridge",
+        ]
+        config_commands = [
+            # default tool discovery reads saved model settings before cli overrides
+            ["hermes", "config", "set", "model.default", runtime_model],
+            ["hermes", "config", "set", "model.provider", str(runtime_provider)],
+            ["hermes", "config", "set", "display.show_reasoning", str(self.trace_model_io).lower()],
+            ["hermes", "config", "set", "display.streaming", "true"],
+            ["hermes", "config", "set", "display.tool_progress", "verbose"],
+        ]
+
+        if runtime_base_url:
+            config_commands.append([
+                "hermes", "config", "set", "model.base_url", str(runtime_base_url),
+            ])
+
+        if self.reasoning_effort is not None:
+            config_commands.append([
+                "hermes", "config", "set", "agent.reasoning_effort",
+                self.reasoning_effort,
+            ])
+
+        chat_command = [
+            "hermes",
+            "chat",
+            "--provider",
+            str(runtime_provider),
+            "--model",
+            runtime_model,
+            "--max-turns",
+            str(self.max_turns),
+            "--ignore-rules",
+        ]
+
+        if self.yolo:
+            chat_command.append("--yolo")
+
+        chat_command.extend(["-q", instruction])
+
+        # ----- step 3 -----
+        # configure Hermes and run the agent
+        with temporary_environment(runtime_environment):
+            register = subprocess.run(register_command,
+                                      input="y\n",
+                                      text=True,
+                                      stdout=subprocess.PIPE,
+                                      stderr=subprocess.PIPE,
+                                      timeout=60)
+            config_results = []
+
+            for command in config_commands:
+                config_results.append(
+                    subprocess.run(command,
+                                   text=True,
+                                   stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE,
+                                   timeout=30)
+                )
+
+            try:
+                chat, terminated_after_game = run_process_until_game_complete(
+                    chat_command,
+                    completion_path=completion_path,
+                )
+                metadata["terminated_after_game"] = terminated_after_game
+            except subprocess.TimeoutExpired as error:
+                def timeout_output(value: str | bytes | None) -> str:
+                    if isinstance(value, bytes):
+                        return value.decode("utf-8", errors="replace")
+                    return value or ""
+
+                partial_stdout = timeout_output(error.stdout)
+                partial_stderr = timeout_output(error.stderr)
+                combined_trace = redact_sensitive("\n".join([
+                    "trace_settings:",
+                    json.dumps({"model_io": self.trace_model_io}),
+                    "hermes_mcp_add_command:",
+                    " ".join(register_command),
+                    "hermes_mcp_add_stdout:",
+                    register.stdout,
+                    "hermes_mcp_add_stderr:",
+                    register.stderr,
+                    "hermes_config_commands:",
+                    "\n".join(" ".join(command) for command in config_commands),
+                    "hermes_config_stdout:",
+                    "\n".join(result.stdout for result in config_results),
+                    "hermes_config_stderr:",
+                    "\n".join(result.stderr for result in config_results),
+                    "hermes_chat_command:",
+                    " ".join(chat_command[:-1] + ["<instruction>"]),
+                    "hermes_chat_stdout:",
+                    partial_stdout,
+                    "hermes_chat_stderr:",
+                    partial_stderr,
+                    f"hermes_timeout: {error.timeout}s",
+                ]))
+                metadata["runtime_error"] = (
+                    f"Hermes timed out after {error.timeout}s"
+                )
+                metadata["tool_call_count_hint"] = (
+                    partial_stdout.count(f"Tool call: mcp__{GAME_MCP_SERVER_NAME}__")
+                    + partial_stderr.count(f"Tool call: mcp__{GAME_MCP_SERVER_NAME}__")
+                    + partial_stdout.count("Tool call: mcp__clem_game__")
+                    + partial_stderr.count("Tool call: mcp__clem_game__")
+                )
+                trace_path = write_text_artifact(
+                    output_dir=output_dir,
+                    filename="adapter_messages.txt",
+                    content=combined_trace,
+                )
+                if trace_path is not None:
+                    artifacts["adapter_messages"] = trace_path
+                print(combined_trace)
+                return AgentRunResult(
+                    success=False,
+                    artifacts=artifacts,
+                    metadata=metadata,
+                )
+
+        # ----- step 4 -----
+        # combine the trace and derive the run outcome
+        combined_trace = redact_sensitive("\n".join([
+            "trace_settings:",
+            json.dumps({"model_io": self.trace_model_io}),
+            "hermes_mcp_add_command:",
+            " ".join(register_command),
+            "hermes_mcp_add_stdout:",
+            register.stdout,
+            "hermes_mcp_add_stderr:",
+            register.stderr,
+            "hermes_config_commands:",
+            "\n".join(" ".join(command) for command in config_commands),
+            "hermes_config_stdout:",
+            "\n".join(result.stdout for result in config_results),
+            "hermes_config_stderr:",
+            "\n".join(result.stderr for result in config_results),
+            "hermes_chat_command:",
+            " ".join(chat_command[:-1] + ["<instruction>"]),
+            "hermes_chat_stdout:",
+            chat.stdout,
+            "hermes_chat_stderr:",
+            chat.stderr,
+        ]))
+        session_text = chat.stdout + "\n" + chat.stderr
+        completion = read_game_completion(completion_path)
+        if completion is not None:
+            metadata["game_completed"] = bool(
+                completion
+                and completion.get("done") is True
+                and completion.get("control_failure") is not True
+            )
+        else:
+            metadata["game_completed"] = any(
+                marker in session_text
+                for marker in (
+                    '"done":true',
+                    '"done": true',
+                    '\\"done\\":true',
+                    '\\"done\\": true',
+                )
+            )
+        session_match = re.search(r"^Session:\s*(\S+)",
+                                  session_text,
+                                  flags=re.MULTILINE)
+
+        if session_match is None:
+            session_match = re.search(r"hermes --resume\s+(\S+)", session_text)
+
+        if session_match is None:
+            session_match = re.search(r"\bsession=([A-Za-z0-9_.:-]+)", session_text)
+
+        if session_match is not None:
+            metadata["hermes_session_id"] = session_match.group(1)
+
+        metadata["returncode"] = chat.returncode
+        metadata["tool_call_count_hint"] = (
+                chat.stdout.count(f"Tool call: mcp__{GAME_MCP_SERVER_NAME}__")
+                + chat.stderr.count(f"Tool call: mcp__{GAME_MCP_SERVER_NAME}__")
+                + chat.stdout.count("Tool call: mcp__clem_game__")
+                + chat.stderr.count("Tool call: mcp__clem_game__")
+        )
+        metadata["success"] = (
+            register.returncode == 0
+            and metadata["game_completed"]
+        )
+
+        if register.returncode != 0:
+            metadata["runtime_error"] = "hermes mcp add failed"
+        elif chat.returncode != 0 and not metadata["game_completed"]:
+            metadata["runtime_error"] = "hermes chat failed"
+        elif metadata["tool_call_count_hint"] <= 0 and not metadata["game_completed"]:
+            metadata["runtime_error"] = "hermes completed without visible clem_game MCP tool calls"
+        elif not metadata["game_completed"]:
+            metadata["runtime_error"] = (
+                "Hermes ended before clem_game reported done=true"
+            )
+
+        # ----- step 5 -----
+        # write the trace and export available Hermes session artifacts
+        trace_path = write_text_artifact(output_dir=output_dir,
+                                         filename="adapter_messages.txt",
+                                         content=combined_trace)
+
+        if trace_path is not None:
+            artifacts["adapter_messages"] = trace_path
+
+        session_id = metadata["hermes_session_id"]
+
+        if output_dir is not None and session_id:
+            session_export_path = Path(output_dir) / "hermes_session_export.jsonl"
+            session_export = subprocess.run(
+                [
+                    "hermes",
+                    "sessions",
+                    "export",
+                    "--session-id",
+                    str(session_id),
+                    str(session_export_path),
+                ],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=60,
+            )
+            session_export_meta_path = write_text_artifact(
+                output_dir=output_dir,
+                filename="hermes_session_export_meta.txt",
+                content="\n".join([
+                    "hermes_sessions_export_returncode:",
+                    str(session_export.returncode),
+                    "hermes_sessions_export_stdout:",
+                    session_export.stdout,
+                    "hermes_sessions_export_stderr:",
+                    session_export.stderr,
+                ]),
+            )
+
+            if session_export_meta_path is not None:
+                artifacts["hermes_session_export_meta"] = session_export_meta_path
+
+            if session_export_path.exists():
+                artifacts["hermes_session_export"] = session_export_path
+
+            hermes_log = subprocess.run(
+                [
+                    "hermes",
+                    "logs",
+                    "--session",
+                    str(session_id),
+                    "--lines",
+                    "1000",
+                ],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=60,
+            )
+            hermes_log_path = write_text_artifact(
+                output_dir=output_dir,
+                filename="hermes_agent_log.txt",
+                content="\n".join([
+                    "hermes_logs_returncode:",
+                    str(hermes_log.returncode),
+                    "hermes_logs_stdout:",
+                    hermes_log.stdout,
+                    "hermes_logs_stderr:",
+                    hermes_log.stderr,
+                ]),
+            )
+
+            if hermes_log_path is not None:
+                artifacts["hermes_agent_log"] = hermes_log_path
+
+        print(combined_trace)
+
+        return AgentRunResult(success=bool(metadata["success"]),
+                              artifacts=artifacts,
+                              metadata=metadata)
+
+
+def resolve_clem_model_for_hermes(clem_model: str) -> dict[str, Any]:
+    model_spec = connections._find_model_spec(clem_model)
+    backend = model_spec.get("backend")
+    model_id = model_spec.get("model_id") or model_spec.get("model_name")
+
+    if backend == "openrouter":
+        key_config = connections._openrouter_key_config()
+
+        return {
+            "harness": "hermes",
+            "clem_model": model_spec["model_name"],
+            "backend": "openrouter",
+            "model": model_id,
+            "display_model": model_spec["model_name"],
+            "base_url": connections._openrouter_openai_base_url(key_config),
+            "request_body_overrides": connections._model_request_body_overrides(model_spec),
+            "env": {
+                "OPENROUTER_API_KEY": connections._openrouter_api_key(key_config),
+            },
+        }
+
+    if backend == "openai_compatible":
+        key_config = connections._openai_compatible_key_config()
+        connection = connections._openai_compatible_common(model_spec, key_config)
+        connection.update({
+            "harness": "hermes",
+            "provider": "openai-api",
+            "env": {
+                "OPENAI_BASE_URL": connection["base_url"],
+                "OPENAI_API_KEY": connections._openai_compatible_api_key(key_config),
+            },
+        })
+        return connection
+
+    raise NotImplementedError(
+        "MVP limitation: Hermes registry-model support currently only "
+        f"supports clembench models with backend='openrouter' or backend='openai_compatible'. "
+        f"Model {clem_model!r} has backend={backend!r}."
+    )
+
