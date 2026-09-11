@@ -31,8 +31,10 @@ the bridge forwards game actions to the host and returns observations.
 | `adapters/utils.py` | Shared process and artifact utilities |
 | `adapters/openai_compatible_proxy.py` | API recording, configured request overrides and shutdown gating |
 | `transcribe_agent_loop/` | Harness-independent HTML rendering of uniform events |
-| `post_processing/` | Optional result-analysis helpers |
 | `docker/agent-sandbox/` | Sandbox image and container entry point |
+
+Project-specific post-processing lives in the separate `IMClemAgents-clembench`
+repository and is not included in this package.
 
 The engine contains no game-name or harness-name dispatch. Native tool names
 are preserved. API recording/overrides are existing transport behavior; this
