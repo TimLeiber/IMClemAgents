@@ -10,6 +10,8 @@ from typing import Any
 from . import hermes_observer, model_connection as connections
 from .base import AgentRunResult, ExternalAgentHarness
 from .traces.hermes import parse_hermes_agent_trace
+from .tls import configure_tls, require_resolved_tls, write_ca_bundle
+from .openai_compatible_proxy import proxy_for_model_connection
 from .utils import (GAME_MCP_SERVER_NAME, load_model_connection, mcp_environment, model_connection_environment,
                     new_game_completion_path, read_game_completion, redact_sensitive, resolve_runtime_model,
                     run_process_until_game_complete, temporary_environment, warn_model_generation_config,
@@ -22,12 +24,12 @@ class HermesHarness(ExternalAgentHarness):
     @classmethod
     def resolve_model_connection(cls, model_spec: dict[str, Any], agent_config: dict[str, Any]) -> dict[str, Any]:
         warn_model_generation_config(model_spec)
-        return _resolve_model_connection(model_spec)
+        return configure_tls(_resolve_model_connection(model_spec), agent_config)
 
     def __init__(self, model: str | None = None, clem_model: str | None = None, provider: str = "openrouter",
                  mcp_url: str = "http://host.docker.internal:8001/mcp", max_turns: int = 20, yolo: bool = True,
                  reasoning_effort: str | None = None, model_connection_path: str | None = None,
-                 trace_model_io: bool = True):
+                 trace_model_io: bool = True, ca_bundle: str | None = None, verify_tls: bool | None = None):
         """Configure Hermes through its native controls.
 
         Args:
@@ -40,6 +42,8 @@ class HermesHarness(ExternalAgentHarness):
             reasoning_effort: native effort, rejected if a complete snapshot proves its API control absent
             model_connection_path: resolved model-connection file
             trace_model_io: record native request dumps and observation events
+            ca_bundle: optional host PEM file resolved through clem_model before startup
+            verify_tls: optional provider certificate verification policy resolved through clem_model
         """
         self.model = model or clem_model
         self.clem_model = clem_model
@@ -50,11 +54,10 @@ class HermesHarness(ExternalAgentHarness):
         self.reasoning_effort = reasoning_effort
         self.trace_model_io = trace_model_io
         self._model_connection = load_model_connection("hermes", model_connection_path)
+        require_resolved_tls(self._model_connection, ca_bundle, verify_tls)
         connection = self._model_connection or {}
         if any(connection.get(key) for key in ("request_body_overrides", "generation_overrides", "upstream_model")):
             raise ValueError("Hermes does not accept request overrides; configure its native agent controls instead")
-        if connection.get("verify_tls") is False:
-            raise ValueError("Hermes uses native TLS verification; disabling it is not supported by this adapter")
 
     @classmethod
     def parse_agent_trace(cls, episode_dir: Path, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -62,6 +65,18 @@ class HermesHarness(ExternalAgentHarness):
 
     def run_episode(self, instruction: str, output_dir: Path | str | None = None) -> AgentRunResult:
         completion_path = new_game_completion_path()
+        if (self._model_connection or {}).get("verify_tls") is False:
+            # only opt-in insecure connections use forwarding, native observation stays unchanged
+            proxy = proxy_for_model_connection(self._model_connection, completion_path, include_openrouter=True,
+                                               trace_requests=False, trace_responses=False)
+            if proxy is None:
+                raise ValueError("verify_tls=false requires a supported resolved provider endpoint")
+            with proxy:
+                return self._run_episode(instruction, output_dir, completion_path, proxy.base_url)
+        return self._run_episode(instruction, output_dir, completion_path)
+
+    def _run_episode(self, instruction: str, output_dir: Path | str | None, completion_path: Path,
+                     forwarded_base_url: str | None = None) -> AgentRunResult:
         run_dir = Path(output_dir).resolve() if output_dir is not None else Path(tempfile.mkdtemp(prefix="hermes-episode-"))
         run_dir.mkdir(parents=True, exist_ok=True)
         observer_path = run_dir / "hermes_observer.jsonl"
@@ -71,6 +86,7 @@ class HermesHarness(ExternalAgentHarness):
         metadata = {"adapter": "hermes", "model": self.model, "clem_model": self.clem_model,
                     "resolved_backend": connection.get("backend"), "gateway_base_url": connection.get("base_url"),
                     "provider": provider, "max_turns": self.max_turns, "reasoning_effort": self.reasoning_effort,
+                    "verify_tls": connection.get("verify_tls", True), "forwarded_base_url": forwarded_base_url,
                     "trace_model_io": self.trace_model_io, "capture_method": "native_observer_and_request_dumps",
                     "success": False, "returncode": None, "runtime_error": None, "game_completed": False,
                     "terminated_after_game": False, "hermes_session_id": None, "tool_call_count_hint": 0}
@@ -80,9 +96,15 @@ class HermesHarness(ExternalAgentHarness):
                                                   harness_name="HermesHarness")
             metadata["runtime_model"] = runtime_model
             environment = model_connection_environment(self._model_connection)
+            if connection.get("ca_certificates") is not None:
+                # native python clients consume this without changing the provider endpoint
+                bundle = run_dir / "provider_ca_bundle.pem"
+                environment["SSL_CERT_FILE"] = write_ca_bundle(connection["ca_certificates"], bundle)
+                environment["REQUESTS_CA_BUNDLE"] = str(bundle)
+                artifacts["provider_ca_bundle"] = bundle
             endpoint_variable = "OPENROUTER_BASE_URL" if provider == "openrouter" else "OPENAI_BASE_URL"
-            if connection.get("base_url"):
-                environment[endpoint_variable] = connection["base_url"]
+            if forwarded_base_url or connection.get("base_url"):
+                environment[endpoint_variable] = forwarded_base_url or connection["base_url"]
             bridge_environment = mcp_environment(self.mcp_url, include_pythonpath=True)
             bridge_environment["GAME_COMPLETION_PATH"] = str(completion_path)
             config = {"model": {"default": runtime_model, "provider": provider},

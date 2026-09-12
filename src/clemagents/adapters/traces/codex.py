@@ -16,6 +16,21 @@ def parse_codex_agent_trace(episode_dir: Path, metadata: dict[str, Any] | None =
 
     trace_text = trace_path.read_text(encoding="utf-8", errors="replace")
     records = _provider_trace_records(trace_text)
+    recovered_host_trace = False
+    # older finalized artifacts omitted api records that remain in the host log
+    relative_artifact = (metadata or {}).get("native_artifact_directory")
+    if relative_artifact and not any(record["type"] == "model_request" for record in records):
+        for parent in episode_dir.parents:
+            if parent / relative_artifact != episode_dir:
+                continue
+            host_trace = parent / "agent_trace.log"
+            if host_trace.is_file():
+                host_text = host_trace.read_text(encoding="utf-8", errors="replace")
+                host_records = _provider_trace_records(host_text)
+                if any(record["type"] == "model_request" for record in host_records):
+                    trace_text, records = host_text, host_records
+                    recovered_host_trace = True
+            break
     events = []
     seen_input_items = set()
     seen_output_item_ids = set()
@@ -95,6 +110,9 @@ def parse_codex_agent_trace(episode_dir: Path, metadata: dict[str, Any] | None =
                                "content": f"Provider response returned HTTP {record['status']}"})
 
     events.extend(_codex_runtime_errors(trace_text, final_turn=model_response_count or None))
+    if recovered_host_trace:
+        events.append({"type": "trace_warning", "source": "host_log",
+                       "content": "Recovered API records from the host log; the original finalized Codex artifact omitted them."})
 
     for sequence, event in enumerate(events, start=1):
         event["sequence"] = sequence
@@ -223,6 +241,8 @@ def _codex_response_events(record: dict[str, Any], turn: int, seen_output_item_i
 
             if response.get("status") in {"failed", "incomplete"}:
                 terminal_failure = (response.get("error") or response.get("incomplete_details") or {"message": "Provider response did not complete"})
+        elif event_type == "error":
+            terminal_failure = event.get("error") or {"message": event.get("message", "Provider stream failed")}
 
     # some compatible providers serialize terminal function calls before the
     # reasoning and preamble that caused them, while codex executes them last

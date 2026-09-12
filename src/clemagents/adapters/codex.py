@@ -1,6 +1,7 @@
 from .traces.codex import parse_codex_agent_trace
 from . import model_connection as connections
 from .utils import warn_model_generation_config
+from .tls import configure_tls, require_resolved_tls
 import json
 import os
 import subprocess
@@ -12,7 +13,7 @@ from clemagents.adapters.openai_compatible_proxy import proxy_for_model_connecti
 from clemagents.adapters.utils import (GAME_MCP_SERVER_NAME, load_model_connection, mcp_environment,
                                        model_connection_environment, new_game_completion_path, read_game_completion,
                                        resolve_runtime_model, run_process_until_game_complete, temporary_environment,
-                                       write_text_artifact)
+                                       write_text_artifact, redact_sensitive)
 
 
 class CodexHarness(ExternalAgentHarness):
@@ -25,12 +26,20 @@ class CodexHarness(ExternalAgentHarness):
     @classmethod
     def resolve_model_connection(cls, model_spec: dict[str, Any], agent_config: dict[str, Any]) -> dict[str, Any]:
         warn_model_generation_config(model_spec)
-        return _resolve_model_connection(model_spec)
+        connection = _resolve_model_connection(model_spec)
+        context_window = connections._model_context_window(model_spec)
+        if context_window is not None:
+            connection["model_context_window"] = _positive_token_limit(context_window, "context_size")
+        elif model_spec.get("context_size") is not None:
+            raise ValueError("Codex cannot interpret model registry context_size")
+        return configure_tls(connection, agent_config)
 
     def __init__(self, model: str | None = None, clem_model: str | None = None,
                  mcp_url: str = "http://host.docker.internal:8001/mcp", sandbox: str = "full_access",
                  reasoning_effort: str | None = None, model_connection_path: str | None = None,
-                 trace_model_io: bool = True):
+                 trace_model_io: bool = True, model_context_window: int | None = None,
+                 model_auto_compact_token_limit: int | None = None, model_catalog: dict[str, Any] | None = None,
+                 ca_bundle: str | None = None, verify_tls: bool | None = None):
         """Configure the Codex harness.
 
         Args:
@@ -41,6 +50,11 @@ class CodexHarness(ExternalAgentHarness):
             reasoning_effort: model reasoning effort passed to Codex
             model_connection_path: optional resolved model-connection file
             trace_model_io: whether to record model requests and responses
+            model_context_window: native context limit in tokens, overriding registry context_size
+            model_auto_compact_token_limit: optional native compaction threshold in tokens
+            model_catalog: optional explicit native catalog otherwise leaving Codex defaults intact
+            ca_bundle: optional host PEM file resolved through clem_model before startup
+            verify_tls: optional provider certificate verification policy resolved through clem_model
         """
 
         self.model = model or clem_model or "gpt-5.4"
@@ -50,6 +64,16 @@ class CodexHarness(ExternalAgentHarness):
         self.reasoning_effort = reasoning_effort
         self.trace_model_io = trace_model_io
         self._model_connection = load_model_connection("codex", model_connection_path)
+        require_resolved_tls(self._model_connection, ca_bundle, verify_tls)
+        registry_window = (self._model_connection or {}).get("model_context_window")
+        self.model_context_window = _positive_token_limit(model_context_window if model_context_window is not None
+                                                          else registry_window, "model_context_window")
+        self.model_auto_compact_token_limit = _positive_token_limit(model_auto_compact_token_limit,
+                                                                    "model_auto_compact_token_limit")
+        if (self.model_context_window is not None and self.model_auto_compact_token_limit is not None
+                and self.model_auto_compact_token_limit > self.model_context_window):
+            raise ValueError("model_auto_compact_token_limit must not exceed model_context_window")
+        self.model_catalog = model_catalog
 
     @classmethod
     def parse_agent_trace(cls, episode_dir: Path, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -65,7 +89,14 @@ class CodexHarness(ExternalAgentHarness):
 
         if proxy is not None:
             with proxy:
-                return self._run_episode(instruction, output_dir, completion_path, proxy.base_url)
+                result = self._run_episode(instruction, output_dir, completion_path, proxy.base_url)
+                # finalized artifacts must retain the same api records as the live log
+                proxy_trace = redact_sensitive(proxy.captured_trace())
+                adapter_messages = result.artifacts.get("adapter_messages")
+                if proxy_trace and adapter_messages is not None:
+                    trace_path = Path(adapter_messages)
+                    trace_path.write_text(trace_path.read_text(encoding="utf-8") + "\n" + proxy_trace, encoding="utf-8")
+                return result
 
         return self._run_episode(instruction, output_dir, completion_path, None)
 
@@ -117,6 +148,25 @@ class CodexHarness(ExternalAgentHarness):
         if self.reasoning_effort is not None:
             config_lines.append(f"model_reasoning_effort = {json.dumps(self.reasoning_effort)}")
 
+        # pass context controls to codex itself without changing provider requests or model profiles
+        for key in ("model_context_window", "model_auto_compact_token_limit"):
+            value = getattr(self, key)
+            if value is not None:
+                config_lines.append(f"{key} = {value}")
+        catalog = self.model_catalog
+        saved_catalog_path = None
+        if catalog is not None:
+            models = catalog.get("models") if isinstance(catalog, dict) else None
+            if not isinstance(models, list) or not any(isinstance(model, dict) and model.get("slug") == codex_model
+                                                     for model in models):
+                raise ValueError("model_catalog must contain a models list with the selected runtime model slug")
+            catalog_path = config_dir / "model_catalog.json"
+            catalog_text = json.dumps(catalog, indent=2, ensure_ascii=False) + "\n"
+            catalog_path.write_text(catalog_text, encoding="utf-8")
+            config_lines.append(f"model_catalog_json = {json.dumps(str(catalog_path))}")
+            saved_catalog_path = write_text_artifact(output_dir=output_dir, filename="codex_model_catalog.json",
+                                                     content=catalog_text)
+
         if runtime_base_url:
             if resolved_backend == "openrouter" and proxied_base_url is not None:
                 config_lines.extend(['model_provider = "openrouter_proxy"', "", "[model_providers.openrouter_proxy]",
@@ -137,6 +187,9 @@ class CodexHarness(ExternalAgentHarness):
                              'enabled_tools = ["start_game", "submit_response"]', 'default_tools_approval_mode = "approve"', "",
                              f"[mcp_servers.{GAME_MCP_SERVER_NAME}.env]", environment_lines, ""])
         config_path.write_text("\n".join(config_lines), encoding="utf-8")
+        # preserve native configuration even when the host terminates the episode before finalization
+        write_text_artifact(output_dir=output_dir, filename="codex_config.toml",
+                            content=config_path.read_text(encoding="utf-8"))
 
         # step 3
         # build the codex instruction and command
@@ -183,6 +236,9 @@ class CodexHarness(ExternalAgentHarness):
                     "codex_config": str(config_path),
                     "sandbox": self.sandbox,
                     "reasoning_effort": self.reasoning_effort,
+                    "model_context_window": self.model_context_window,
+                    "model_auto_compact_token_limit": self.model_auto_compact_token_limit,
+                    "custom_model_catalog": self.model_catalog is not None,
                     "trace_model_io": self.trace_model_io,
                     "success": False,
                     "runtime_error": None,
@@ -239,8 +295,17 @@ class CodexHarness(ExternalAgentHarness):
 
         if saved_config_path is not None:
             artifacts["codex_config"] = saved_config_path
+        if saved_catalog_path is not None:
+            artifacts["codex_model_catalog"] = saved_catalog_path
 
         return AgentRunResult(success=bool(metadata["success"]), artifacts=artifacts, metadata=metadata)
+
+
+def _positive_token_limit(value: int | None, name: str) -> int | None:
+    """Validate a native token count without silently converting invalid values."""
+    if value is not None and (type(value) is not int or value <= 0):
+        raise ValueError(f"{name} must be a positive integer token count")
+    return value
 
 
 def _resolve_model_connection(model_spec: dict[str, Any]) -> dict[str, Any]:

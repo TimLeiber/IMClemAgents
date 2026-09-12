@@ -1,6 +1,7 @@
 from .traces.openclaw import parse_openclaw_agent_trace
 from . import model_connection as connections
 from .utils import warn_model_generation_config
+from .tls import configure_tls, require_resolved_tls
 import json
 import os
 import re
@@ -95,13 +96,14 @@ class OpenClawHarness(ExternalAgentHarness):
     @classmethod
     def resolve_model_connection(cls, model_spec: dict[str, Any], agent_config: dict[str, Any]) -> dict[str, Any]:
         warn_model_generation_config(model_spec)
-        return _resolve_model_connection(model_spec)
+        return configure_tls(_resolve_model_connection(model_spec), agent_config)
 
     def __init__(self, model: str | None = None, clem_model: str | None = None,
                  mcp_url: str = "http://host.docker.internal:8001/mcp", thinking: str | None = None,
                  verbose: bool = False, profile: str = "game-agent", yolo: bool = True, debug: bool = False,
                  reasoning_effort: str | None = None, model_connection_path: str | None = None,
-                 trace_model_io: bool = True, temperature: float | None = None):
+                 trace_model_io: bool = True, temperature: float | None = None, ca_bundle: str | None = None,
+                 verify_tls: bool | None = None):
         self.model = model or clem_model
         self.clem_model = clem_model
         self.mcp_url = mcp_url
@@ -114,6 +116,7 @@ class OpenClawHarness(ExternalAgentHarness):
         self.debug = debug
         self.trace_model_io = trace_model_io
         self._model_connection = load_model_connection("openclaw", model_connection_path)
+        require_resolved_tls(self._model_connection, ca_bundle, verify_tls)
         _validate_openclaw_model_connection(self._model_connection)
 
     @classmethod

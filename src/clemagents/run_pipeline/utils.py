@@ -7,6 +7,7 @@ import subprocess
 import threading
 import time
 import os
+import sys
 import traceback
 from datetime import datetime, timezone
 from multiprocessing import Process, Queue as ProcessQueue
@@ -27,7 +28,7 @@ SANDBOX_DIR = PACKAGE_ROOT / "docker" / "agent-sandbox"
 # paths required by the external-agent pipeline
 REGISTRY_PATH = Path("agent_registry.json").resolve()
 KEYS_PATH = Path("key.json").resolve()
-DOCKER_IMAGE = "clemagents-sandbox:dev"
+DOCKER_IMAGE = os.environ.get("CLEMAGENTS_SANDBOX_IMAGE", "clemagents-sandbox:dev")
 # by convention i set 8001 to be port of the mcp server
 SERVER_PORT = 8001
 # define variables dependent on port
@@ -380,6 +381,10 @@ def run_docker_episode(experiment_name: str, game_id: int | str, agent_name: str
                "-e", "GAME_OBSERVATION_DIR=/workspace/game_observations", "-v",
                f"{PACKAGE_ROOT}:/opt/clemagents/src/clemagents:ro", "-v", f"{SANDBOX_DIR}:/app:ro", "-v",
                f"{registry_path}:/tmp/agent_registry.json:ro"]
+
+    # docker engine on linux needs an explicit route back to the host
+    if sys.platform == "linux":
+        command.extend(["--add-host", "host.docker.internal:host-gateway"])
 
     # forward credentials without writing their values into the docker command
     for name in container_environment:

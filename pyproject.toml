@@ -13,7 +13,7 @@ license-files = ["LICENSE"]
 dependencies = [
     "clemcore==3.7.2",
     "fastmcp==3.3.1",
-    "mcp==1.27.1",
+    "mcp==1.26.0",
     "openenv-core==0.2.3",
     "gymnasium>=1.2,<2",
     "pettingzoo>=1.25,<2",

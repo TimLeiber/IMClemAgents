@@ -1,6 +1,7 @@
 from .traces.claude_code import parse_claude_code_agent_trace
 from . import model_connection as connections
 from .utils import warn_model_generation_config
+from .tls import configure_tls, require_resolved_tls
 import asyncio
 import warnings
 from pathlib import Path
@@ -30,13 +31,14 @@ class ClaudeCodeHarness(ExternalAgentHarness):
     @classmethod
     def resolve_model_connection(cls, model_spec: dict[str, Any], agent_config: dict[str, Any]) -> dict[str, Any]:
         warn_model_generation_config(model_spec)
-        return _resolve_model_connection(model_spec)
+        return configure_tls(_resolve_model_connection(model_spec), agent_config)
 
     def __init__(self, model: str | None = None, clem_model: str | None = None,
                  mcp_url: str = "http://localhost:8001/mcp", max_turns: int | None = None,
                  allowed_tools: list[str] | None = None, permission_mode: str = "bypassPermissions",
                  timeout: float | None = None, reasoning_effort: str | None = None,
-                 model_connection_path: str | None = None, trace_model_io: bool = True):
+                 model_connection_path: str | None = None, trace_model_io: bool = True, ca_bundle: str | None = None,
+                 verify_tls: bool | None = None):
         """Configure the Claude Code harness.
 
         Args:
@@ -53,6 +55,8 @@ class ClaudeCodeHarness(ExternalAgentHarness):
                 provider-side semantics must be verified for compatible APIs
             model_connection_path: optional resolved model-connection file
             trace_model_io: whether to record model requests and responses
+            ca_bundle: optional host PEM file resolved through clem_model before startup
+            verify_tls: optional provider certificate verification policy resolved through clem_model
         """
 
         self.model = model or clem_model
@@ -66,6 +70,7 @@ class ClaudeCodeHarness(ExternalAgentHarness):
         self.reasoning_effort = reasoning_effort
         self.trace_model_io = trace_model_io
         self._model_connection = load_model_connection("claude_code", model_connection_path)
+        require_resolved_tls(self._model_connection, ca_bundle, verify_tls)
         if reasoning_effort in {"none", "off"} and (self._model_connection or {}).get("backend") == "openai_compatible":
             warnings.warn("Claude Code disables thinking natively by omitting the API thinking field; "
                           "verify that your compatible provider interprets omission as off before benchmarking", stacklevel=2)

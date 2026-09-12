@@ -16,8 +16,19 @@ Add an entry to the **games repository's** `agent_registry.json`:
 
 The backend determines the adapter module. Every `agent_config` field is passed
 to its constructor. No runner or transcription dispatch table needs changing.
-Install the native harness in the sandbox image as required; that dependency
-installation may require a Dockerfile change and rebuild.
+Install the native harness software in
+`src/clemagents/docker/agent-sandbox/Dockerfile`, pinning its version explicitly.
+Resolve any shared Python dependency constraints together with the existing
+packages; do not bypass conflicting requirements with `--no-deps`. Rebuild locally:
+
+```bash
+docker build -f src/clemagents/docker/agent-sandbox/Dockerfile -t clemagents-sandbox:dev .
+```
+
+Adding an adapter alone does not install the harness software. The Dockerfile
+change is sandbox setup, not an engine or game change. Rebuild whenever the
+harness version or its dependencies change; a Python-only adapter edit in an
+editable installation does not require rebuilding.
 
 The adapter has three responsibilities:
 

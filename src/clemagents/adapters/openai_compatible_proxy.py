@@ -9,6 +9,8 @@ from urllib.parse import urlsplit
 import requests
 import urllib3
 
+from .tls import write_ca_bundle
+
 HOP_BY_HOP_HEADERS = {"connection", "content-length", "host", "keep-alive", "proxy-authenticate", "proxy-authorization",
                       "te", "trailer",
                       "transfer-encoding", "upgrade"}
@@ -93,7 +95,7 @@ def _write_completion_marker_from_tool_results(payload: dict[str, Any], completi
 class _ProxyServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, target_origin: str, completion_path: Path, verify_tls: bool,
+    def __init__(self, target_origin: str, completion_path: Path, verify_tls: bool | str,
                  trace_responses: bool, trace_requests: bool):
         super().__init__(("127.0.0.1", 0), _ProxyHandler)
         self.target_origin = target_origin
@@ -237,7 +239,7 @@ class OpenAICompatibleProxy(AbstractContextManager["OpenAICompatibleProxy"]):
     """Local protocol-preserving proxy for OpenAI-compatible model servers."""
 
     def __init__(self, target_base_url: str, completion_path: Path, verify_tls: bool = True,
-                 trace_responses: bool = True, trace_requests: bool = False):
+                 trace_responses: bool = True, trace_requests: bool = False, ca_certificates: str | None = None):
         parsed = urlsplit(target_base_url)
 
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
@@ -245,6 +247,12 @@ class OpenAICompatibleProxy(AbstractContextManager["OpenAICompatibleProxy"]):
 
         target_origin = f"{parsed.scheme}://{parsed.netloc}"
         self._base_path = parsed.path.rstrip("/")
+        self._ca_bundle_path = None
+        if ca_certificates is not None:
+            if not verify_tls:
+                raise ValueError("ca_certificates requires TLS verification to remain enabled")
+            self._ca_bundle_path = completion_path.with_suffix(".ca.pem")
+            verify_tls = write_ca_bundle(ca_certificates, self._ca_bundle_path)
         self._server = _ProxyServer(target_origin=target_origin, completion_path=completion_path,
                                     verify_tls=verify_tls, trace_responses=trace_responses,
                                     trace_requests=trace_requests)
@@ -272,6 +280,8 @@ class OpenAICompatibleProxy(AbstractContextManager["OpenAICompatibleProxy"]):
         self._server.shutdown()
         self._server.server_close()
         self._thread.join(timeout=5)
+        if self._ca_bundle_path is not None:
+            self._ca_bundle_path.unlink(missing_ok=True)
 
 
 def proxy_for_model_connection(connection: dict[str, Any] | None, completion_path: Path,
@@ -297,4 +307,5 @@ def proxy_for_model_connection(connection: dict[str, Any] | None, completion_pat
 
     return OpenAICompatibleProxy(target_base_url=base_url, completion_path=completion_path,
                                  verify_tls=bool(connection.get("verify_tls", True)),
-                                 trace_responses=trace_responses, trace_requests=trace_requests)
+                                 trace_responses=trace_responses, trace_requests=trace_requests,
+                                 ca_certificates=connection.get("ca_certificates"))

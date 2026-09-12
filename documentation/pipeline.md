@@ -86,6 +86,59 @@ corresponding native agent controls instead. OpenClaw's custom model definition
 may use registry capability metadata to select its native protocol, but does not
 copy the vanilla thinking value into run parameters.
 
+### TLS connection settings
+
+To match vanilla clemcore's OpenAI-compatible TLS behavior, set
+`"verify_tls": false` in the agent's `agent_config`. No certificate file is
+needed. This option requires `clem_model` and applies to that agent's model
+connection; unrelated agents retain their existing settings. `key.json` remains
+endpoint-and-credentials configuration shared with vanilla clembench.
+
+All built-in adapters accept this option. Their adapter-side forwarding transport
+sets upstream certificate verification accordingly, without changing request bodies.
+Hermes normally connects directly; only `verify_tls: false` enables forwarding for
+it because the installed CLI has no native model-client verification-off setting.
+Its native observers and full request dumps remain active. The forwarding URL is
+recorded separately from the upstream URL in adapter metadata. Native behavior can
+depend on endpoint URLs, so verify controls and tools for each new provider route.
+
+For a server requiring additional certificates, set `agent_config.ca_bundle` to a
+public PEM file on the host, for example `"~/.clemcore/certificates/provider.pem"`.
+This optional adapter setting requires `clem_model`; it does not belong in `key.json`.
+Credentials and endpoint URLs remain shared with vanilla clembench.
+
+Each built-in adapter resolves the file through `resolve_model_connection` before
+startup. Only its public certificates are carried into the container, where they
+are appended to the default public roots. This is an alternative to disabling
+verification; combining both settings is rejected. Hermes uses native `SSL_CERT_FILE` and
+`REQUESTS_CA_BUNDLE`; the other adapters configure their existing recorder's
+upstream TLS transport. Certificate and hostname verification remain enabled.
+No request bodies, tools, reasoning controls or native harness source are changed.
+New adapters can reuse `adapters/tls.py` without adding engine branches.
+
+### Codex context and model metadata
+
+The Codex adapter forwards model-registry `context_size` to native
+`model_context_window` in `config.toml`. An explicit `agent_config.model_context_window`
+overrides that value, for example when a local server allocates less than the model's
+maximum context. This configures Codex, not the server's context allocation.
+An optional `model_auto_compact_token_limit` sets Codex's native compaction threshold;
+when omitted, Codex retains its native compaction policy. Both values use integer tokens.
+The configuration is saved before inference, including for interrupted episodes.
+
+The adapter does not generate model profiles or copy Codex's internal defaults.
+Unknown models use Codex's native fallback and may produce its metadata warning;
+the registry context size still reaches the native context control described above.
+Other registry metadata is not injected through a synthetic catalog. Reasoning effort
+comes from the agent configuration, never the model registry's vanilla request settings.
+No provider requests are rewritten and no catalog-version guard blocks startup.
+
+An optional `agent_config.model_catalog` accepts a complete native JSON catalog
+(`{"models": [...]}`), including the selected model's `slug`. Only this explicitly
+supplied catalog is saved with the artifacts and passed through `model_catalog_json`.
+Context configuration does not prove that a live episode compacted, nor does it
+allocate context on the server.
+
 The real model ID is passed to the harness, including Claude Code's SDK. Subagent
 model choices remain the harness's responsibility. The recorder still gates new
 inference after game completion so artifact finalization cannot prolong play.

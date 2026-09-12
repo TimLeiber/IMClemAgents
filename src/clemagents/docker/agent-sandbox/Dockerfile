@@ -108,8 +108,8 @@ RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel && \
         wordfreq \
         wordninja
 
-# pin openclaw across sandbox rebuilds
-RUN npm install -g @anthropic-ai/claude-code @openai/codex openclaw@2026.8.1
+# pin native harness versions to the tested sandbox
+RUN npm install -g @anthropic-ai/claude-code@2.1.252 @openai/codex@0.152.0 openclaw@2026.8.1
 # install the native search provider separately, pinned to the openclaw release
 RUN npm install -g --omit=peer @openclaw/duckduckgo-plugin@2026.8.1 && \
     mkdir -p /opt/openclaw-plugins && \
@@ -117,13 +117,13 @@ RUN npm install -g --omit=peer @openclaw/duckduckgo-plugin@2026.8.1 && \
 COPY pyproject.toml README.md LICENSE /opt/clemagents/
 COPY src /opt/clemagents/src
 
-RUN pip install --no-cache-dir /opt/clemagents && \
-    pip install --no-cache-dir \
-        claude-agent-sdk \
+RUN pip install --no-cache-dir /opt/clemagents \
+        claude-agent-sdk==0.2.87 \
         ddgs==9.14.4 \
-        fastmcp \
-        openai-codex \
-        "hermes-agent[cli,mcp]"
+        fastmcp==3.3.1 \
+        openai-codex==0.154.0 \
+        "hermes-agent[cli,mcp]==0.16.0" && \
+    python -m pip check
 
 RUN useradd -m -u 1000 agent && \
     mkdir -p /workspace /ms-playwright && \
