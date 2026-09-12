@@ -1,39 +1,47 @@
 # IMClemAgents
 
 Evaluate agent harnesses on clembench games through a harness-agnostic pipeline
-built on clemcore. The Python package is `clemagents`; the run command is `agentclem`.
+built on clemcore. The run command is `agentclem`.
 
 Games, model configurations and experiment results live in a separate games
 repository, such as [IMClemAgents-clembench](https://github.com/TimLeiber/IMClemAgents-clembench).
 
 ## Installation
 
-**Docker is required** to build the sandbox and run harness episodes. Installing
-the Python package does not install Docker. Git and Conda are also used below.
-Complete the Docker setup for your OS before building the sandbox.
+Requirements: **Python 3.10–3.12, pip, Git and Docker**. Installing this package
+does not install Docker; see the OS-specific setup below. No particular Python
+environment manager is required.
 
-Clone the repository, then use Python 3.10–3.12 and a fresh environment:
+Clone the repository:
 
 ```bash
 git clone https://github.com/TimLeiber/IMClemAgents.git
 cd IMClemAgents
-conda create -n imagent python=3.11 pip -y
-conda activate imagent
+```
+
+Use a Python environment of your choice. An isolated environment is recommended;
+for example, with Python's built-in `venv` on macOS, Linux or WSL:
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+```
+
+Install the package with your selected Python interpreter:
+
+```bash
 python -m pip install .
 agentclem --help
 ```
 
-The package depends on the published `clemcore` distribution. It does not need
-the project's modified clemcore checkout. Dependency versions are initially
-pinned where protocol compatibility matters; test upgrades before benchmarking.
-Contributors can use `python -m pip install -e '.[dev]'` instead so Python edits
-take effect without reinstalling. Ordinary installations need reinstalling after edits.
+The installation includes `clemcore` as a dependency; no separate clemcore
+checkout is needed. For an editable contributor installation, see Development.
 
 ## Sandbox
 
-Docker runs the harness and its auxiliary tools. macOS on Apple Silicon and
-Ubuntu on AMD64 have been smoke-tested; other configurations are not claimed
-as verified.
+Instances are run in a sanboxed environment so that an agent cannot corrupt the host system. We use Docker to run the harness and its auxiliary tools.
+MacOS on Apple Silicon and
+Ubuntu on AMD64 have been tested. Other configurations are not verified in the same way.
 
 ### macOS
 
@@ -56,17 +64,15 @@ sudo groupadd --force docker
 sudo usermod -aG docker "$USER"
 ```
 
-Log out and back in, or reconnect your SSH session, before running `agentclem`.
-The pipeline must be able to run Docker without sudo. Membership in the Docker
-group grants root-level privileges; see
-[Docker's Linux post-installation guide](https://docs.docker.com/engine/install/linux-postinstall/).
-Ubuntu was tested; Debian instructions are provided but were not separately tested.
+Log out and back in to apply the group change. This allows `agentclem` to run
+Docker without sudo. The Docker group grants administrator-level access;
+see [Docker's post-installation guide](https://docs.docker.com/engine/install/linux-postinstall/).
 
 ### Windows (untested)
 
 Install [Docker Desktop for Windows](https://docs.docker.com/desktop/setup/install/windows-install/)
 following its WSL 2 prerequisites. Enable the WSL 2 backend, Linux containers and
-integration with your chosen WSL distribution. Run the repository, Conda setup
+integration with your chosen WSL distribution. Run the repository, Python setup
 and commands below inside that WSL distribution, with Docker Desktop running.
 The Windows/WSL setup has not been tested for this project.
 
@@ -83,39 +89,18 @@ docker run --rm hello-world
 `docker info` and `hello-world` must succeed without sudo. A CLI version alone
 does not prove that the Docker engine is running or accessible.
 
-Docker Compose is not required. The container runs Debian Bookworm Linux on every
-host OS; its definition is `src/clemagents/docker/agent-sandbox/Dockerfile`.
-Build the sandbox locally for your machine's architecture. No image-registry
-account, image upload or multi-architecture build is required:
+The container runs Debian Bookworm Linux on every
+host OS. Its definition is `src/clemagents/docker/agent-sandbox/Dockerfile`.
+Build the sandbox locally for your machine's architecture.
 
 ```bash
 docker build -f src/clemagents/docker/agent-sandbox/Dockerfile -t clemagents-sandbox:dev .
 ```
+*If you add a new, i.e. previously unsupported harness you would also have to add it to the defintion and start a new build*.
+Build once before running experiments.
 
-The sandbox installs the supported harnesses. The runner mounts this package's
-code read-only for each episode; changing Python source does not require a
-rebuild for an editable installation, while changing installed tools or dependencies does.
-This also works with a non-editable installation: the mounted code comes from the
-installed package, not a required development checkout. Set `CLEMAGENTS_SANDBOX_IMAGE`
-to select another locally built image; otherwise the runner uses
-`clemagents-sandbox:dev`. Build it before running an experiment.
-
-Harness versions are pinned in the Dockerfile: Codex CLI 0.152.0, Hermes 0.16.0,
-and OpenClaw 2026.8.1. The Claude Code adapter uses `claude-agent-sdk` 0.2.87,
-which bundles Claude Code 2.1.150; the separately installed standalone Claude Code
-CLI is pinned to 2.1.252. The separate Codex Python SDK is pinned to 0.154.0.
-Update these versions deliberately and repeat the integration checks before
-using a rebuilt image for benchmarking. These pins do not lock every transitive
-dependency or operating-system package.
-The package and Hermes both require MCP `1.26.0`, the version used by the verified
-sandbox smoke. Python dependencies are resolved together and `pip check` must pass
-during the build; incompatible requirements stop the build rather than silently
-replacing a previously installed dependency.
-
-Adding a harness requires an adapter and installation of the harness software in
-the Dockerfile, followed by a rebuild. No game or engine-specific dispatch changes
-are needed. See [adding a harness](examples/add_harness/README.md) and the
-[fresh-install verification steps](documentation/fresh-install.md).
+The runner uses `clemagents-sandbox:dev` by default. To use another locally built image set
+`CLEMAGENTS_SANDBOX_IMAGE`.
 
 ## Configuration and running
 
@@ -132,7 +117,7 @@ agentclem \
   --experiment_name civic_public \
   --max-instances 1 \
   --results_dir test_results \
-  --episode-timeout 1200
+  --episode-timeout 600
 ```
 
 For a second, automated player, provide `--agent-player player_1 --models MODEL`.
@@ -156,11 +141,23 @@ agentclem-transcribe -r test_results
 
 ## Development
 
+From the pipeline repository, install development dependencies in editable mode:
+
 ```bash
+python -m pip install -e '.[dev]'
 python -m pytest -q
 python -m build
 ```
 
+The runner mounts the installed Python package read-only into each container.
+Editable Python changes therefore take effect without rebuilding the image;
+non-editable installations need reinstalling after source changes.
+
+Adding a harness requires an adapter and installation of its native software in
+the Dockerfile, followed by a rebuild. No game or engine-specific dispatch changes
+are needed. See [adding a harness](examples/add_harness/README.md).
+
 Tests use fixtures and local scripted endpoints. Native harness tests are opt-in
-and require the sandbox. See [documentation/pipeline.md](documentation/pipeline.md) for the execution flow and
-`examples/add_harness/` for the adapter contract.
+and require the sandbox. See [pipeline documentation](documentation/pipeline.md)
+for the execution flow and [fresh-install checks](documentation/fresh-install.md)
+for release verification.
