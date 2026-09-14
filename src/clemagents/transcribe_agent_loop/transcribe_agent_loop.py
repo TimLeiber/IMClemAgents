@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from clemagents.transcribe_agent_loop.utils import (format_event_content, load_agent_loop, write_html)
-from clemagents.adapters.traces.schema import normalize_agent_trace
+from clemagents.adapters.utils.parse import normalize_agent_trace
 
 module_logger = logging.getLogger(__name__)
 

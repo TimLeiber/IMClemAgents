@@ -4,6 +4,7 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
+tests/
 build/
 dist/
 key.json

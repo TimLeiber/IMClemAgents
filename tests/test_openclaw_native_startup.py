@@ -15,7 +15,7 @@ from pathlib import Path
 from threading import Thread
 from unittest.mock import patch
 
-from clemagents.adapters.openclaw import OpenClawHarness
+from clemagents.adapters.openclaw.openclaw import OpenClawHarness
 
 
 @unittest.skipUnless(os.environ.get("RUN_OPENCLAW_NATIVE_TEST") == "1", "requires the isolated agent-sandbox image")
@@ -77,7 +77,7 @@ class TestOpenClawNativeStartup(unittest.TestCase):
                                                                                                  "maxTokens": 4096}]}}},
                                                 "agents": {"defaults": {"model": {"primary": "offline/fixture"}}}}}
         try:
-            with tempfile.TemporaryDirectory() as directory, patch("clemagents.adapters.openclaw.load_model_connection",
+            with tempfile.TemporaryDirectory() as directory, patch("clemagents.adapters.openclaw.openclaw.load_model_connection",
                                                                    return_value=connection):
                 with redirect_stdout(io.StringIO()):
                     result = OpenClawHarness(model_connection_path="unused",

@@ -1,4 +1,4 @@
-from clemagents.adapters.traces.codex import _codex_tool_result_text
+from clemagents.adapters.codex.parse import _codex_tool_result_text
 import asyncio
 import json
 import logging
@@ -17,14 +17,14 @@ from unittest.mock import MagicMock, patch
 
 import requests
 
-from clemagents.adapters import model_connection
+from clemagents.adapters.utils import model_connection
 from clemagents.adapters import harness_class_for_agent
-from clemagents.adapters.claude_code import (ClaudeCodeHarness, _anthropic_proxy_base_url)
-from clemagents.adapters.codex import CodexHarness
-from clemagents.adapters.hermes import HermesHarness
-from clemagents.adapters.openai_compatible_proxy import (OpenAICompatibleProxy, UPSTREAM_REQUEST_TIMEOUT,
+from clemagents.adapters.claude_code.claude_code import (ClaudeCodeHarness, _anthropic_proxy_base_url)
+from clemagents.adapters.codex.codex import CodexHarness
+from clemagents.adapters.hermes.hermes import HermesHarness
+from clemagents.adapters.utils.openai_compatible_proxy import (OpenAICompatibleProxy, UPSTREAM_REQUEST_TIMEOUT,
                                                          _observe_request_body, proxy_for_model_connection)
-from clemagents.adapters.openclaw import (OpenClawHarness, _openclaw_gateway, _validate_openclaw_model_connection)
+from clemagents.adapters.openclaw.openclaw import (OpenClawHarness, _openclaw_gateway, _validate_openclaw_model_connection)
 from clemagents.mcp.bridge import (CONTROL_FAILURE_RESPONSE, OpenEnvMCPClient, REPEATED_START_MESSAGE, create_mcp_bridge
                                    )
 from clemagents.mcp.server import (_SuppressFastMCPToolCallErrors, result_run_dir_name)
@@ -907,9 +907,9 @@ class TestExternalAgentPipeline(unittest.TestCase):
     def test_hermes_timeout_is_a_failed_episode_not_an_exception(self):
         successful_setup = subprocess.CompletedProcess([], 0, "  start_game tool\n  submit_response tool\n", "")
 
-        with patch("clemagents.adapters.hermes.load_model_connection",
-                   return_value=None), patch("clemagents.adapters.hermes.subprocess.run",
-                                             return_value=successful_setup), patch("clemagents.adapters.hermes.run_process_until_game_complete",
+        with patch("clemagents.adapters.hermes.hermes.load_model_connection",
+                   return_value=None), patch("clemagents.adapters.hermes.hermes.subprocess.run",
+                                             return_value=successful_setup), patch("clemagents.adapters.hermes.hermes.run_process_until_game_complete",
                                                                                    side_effect=subprocess.TimeoutExpired(["hermes", "chat"], 1,
                                                                                                                          output="partial Hermes output",
                                                                                                                          stderr="")):
@@ -922,9 +922,9 @@ class TestExternalAgentPipeline(unittest.TestCase):
         successful_setup = subprocess.CompletedProcess([], 0, "  start_game tool\n  submit_response tool\n", "")
         incomplete_chat = subprocess.CompletedProcess([], 0, "Tool call: mcp__clem_game__start_game", "")
 
-        with patch("clemagents.adapters.hermes.load_model_connection",
-                   return_value=None), patch("clemagents.adapters.hermes.subprocess.run", return_value=successful_setup
-                                             ), patch("clemagents.adapters.hermes.run_process_until_game_complete",
+        with patch("clemagents.adapters.hermes.hermes.load_model_connection",
+                   return_value=None), patch("clemagents.adapters.hermes.hermes.subprocess.run", return_value=successful_setup
+                                             ), patch("clemagents.adapters.hermes.hermes.run_process_until_game_complete",
                                                       return_value=(incomplete_chat, False)):
             result = HermesHarness(model="test-model").run_episode("Play the game.")
 
@@ -934,7 +934,7 @@ class TestExternalAgentPipeline(unittest.TestCase):
 
     def test_hermes_records_both_provider_routes_without_verbose_printer(self):
         import yaml
-        from clemagents.adapters.hermes_observer import observe
+        from clemagents.adapters.hermes.utils import observe
 
         received = []
         response_body = {"choices": [{"message": {"role": "assistant",
@@ -1008,9 +1008,9 @@ class TestExternalAgentPipeline(unittest.TestCase):
                                 api_request_id="one")
                         return subprocess.CompletedProcess(command, 0, "Tool call: mcp__game__start_game", ""), False
 
-                    with patch("clemagents.adapters.hermes.load_model_connection", return_value=connection
-                               ), patch("clemagents.adapters.hermes.subprocess.run", side_effect=setup
-                                        ), patch("clemagents.adapters.hermes.run_process_until_game_complete",
+                    with patch("clemagents.adapters.hermes.hermes.load_model_connection", return_value=connection
+                               ), patch("clemagents.adapters.hermes.hermes.subprocess.run", side_effect=setup
+                                        ), patch("clemagents.adapters.hermes.hermes.run_process_until_game_complete",
                                                  side_effect=chat):
                         result = HermesHarness(model="test-model", reasoning_effort="low").run_episode("Play the game.", output_dir=directory)
 
@@ -1412,13 +1412,13 @@ class TestExternalAgentPipeline(unittest.TestCase):
             return subprocess.CompletedProcess(command, 0, '"submit_response"', ""), False
 
         with tempfile.TemporaryDirectory(
-        ) as directory, patch("clemagents.adapters.openclaw.load_model_connection", return_value=connection
-                              ), patch("clemagents.adapters.openclaw.subprocess.run", side_effect=fake_run
-                                       ), patch("clemagents.adapters.openclaw.run_process_until_game_complete",
+        ) as directory, patch("clemagents.adapters.openclaw.openclaw.load_model_connection", return_value=connection
+                              ), patch("clemagents.adapters.openclaw.openclaw.subprocess.run", side_effect=fake_run
+                                       ), patch("clemagents.adapters.openclaw.openclaw.run_process_until_game_complete",
                                                 side_effect=fake_agent_run
-                                                ), patch("clemagents.adapters.openclaw.DUCKDUCKGO_PLUGIN_PATH",
+                                                ), patch("clemagents.adapters.openclaw.openclaw.DUCKDUCKGO_PLUGIN_PATH",
                                                          Path(directory)
-                                                         ), patch("clemagents.adapters.openclaw._openclaw_gateway",
+                                                         ), patch("clemagents.adapters.openclaw.openclaw._openclaw_gateway",
                                                                   return_value=nullcontext()) as gateway:
             (Path(directory) / "openclaw.plugin.json").write_text("{}", encoding="utf-8")
             result = OpenClawHarness(reasoning_effort="medium", temperature=0.8,
@@ -1462,8 +1462,8 @@ class TestExternalAgentPipeline(unittest.TestCase):
             with self.subTest(agent_fails=agent_fails), tempfile.TemporaryDirectory() as directory:
                 process = MagicMock()
                 process.poll.return_value = None
-                with patch("clemagents.adapters.openclaw.subprocess.Popen",
-                           return_value=process) as popen, patch("clemagents.adapters.openclaw.urlopen") as health:
+                with patch("clemagents.adapters.openclaw.openclaw.subprocess.Popen",
+                           return_value=process) as popen, patch("clemagents.adapters.openclaw.utils.urlopen") as health:
                     health.return_value.__enter__.return_value.status = 200
                     try:
                         with _openclaw_gateway(["openclaw", "--profile", "isolated"], Path(directory) / "gateway.txt"):
@@ -1481,7 +1481,7 @@ class TestExternalAgentPipeline(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             process = MagicMock(returncode=1)
             process.poll.return_value = 1
-            with patch("clemagents.adapters.openclaw.subprocess.Popen",
+            with patch("clemagents.adapters.openclaw.openclaw.subprocess.Popen",
                        return_value=process), self.assertRaisesRegex(RuntimeError, "Gateway exited during startup"):
                 with _openclaw_gateway(["openclaw"], Path(directory) / "gateway.txt"):
                     self.fail("agent must not start without the Gateway")
@@ -1491,7 +1491,7 @@ class TestExternalAgentPipeline(unittest.TestCase):
             process = MagicMock()
             process.poll.return_value = None
             process.wait.side_effect = [subprocess.TimeoutExpired("gateway", 10), None]
-            with patch("clemagents.adapters.openclaw.subprocess.Popen",
+            with patch("clemagents.adapters.openclaw.openclaw.subprocess.Popen",
                        return_value=process), self.assertRaisesRegex(RuntimeError, "Gateway was not ready"):
                 with _openclaw_gateway(["openclaw"], Path(directory) / "gateway.txt", startup_timeout=0):
                     self.fail("agent must not start without the Gateway")
@@ -1500,9 +1500,9 @@ class TestExternalAgentPipeline(unittest.TestCase):
 
     def test_openclaw_missing_plugin_fails_before_starting_any_cli(self):
         with tempfile.TemporaryDirectory(
-        ) as directory, patch("clemagents.adapters.openclaw.load_model_connection",
-                              return_value=None), patch("clemagents.adapters.openclaw.DUCKDUCKGO_PLUGIN_PATH",
-                                                        Path(directory) / "missing"), patch("clemagents.adapters.openclaw.subprocess.run") as run:
+        ) as directory, patch("clemagents.adapters.openclaw.openclaw.load_model_connection",
+                              return_value=None), patch("clemagents.adapters.openclaw.openclaw.DUCKDUCKGO_PLUGIN_PATH",
+                                                        Path(directory) / "missing"), patch("clemagents.adapters.openclaw.openclaw.subprocess.run") as run:
             result = OpenClawHarness(model="test-model").run_episode("test", output_dir=directory)
             self.assertFalse(result.success)
             self.assertIn("rebuild", result.metadata["runtime_error"])

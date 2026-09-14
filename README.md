@@ -39,9 +39,8 @@ checkout is needed. For an editable contributor installation, see Development.
 
 ## Sandbox
 
-Instances are run in a sanboxed environment so that an agent cannot corrupt the host system. We use Docker to run the harness and its auxiliary tools.
-MacOS on Apple Silicon and
-Ubuntu on AMD64 have been tested. Other configurations are not verified in the same way.
+Each episode runs its harness and auxiliary tools in a fresh Docker container.
+macOS on Apple Silicon and Ubuntu on AMD64 have been tested.
 
 ### macOS
 
@@ -96,8 +95,8 @@ Build the sandbox locally for your machine's architecture.
 ```bash
 docker build -f src/clemagents/docker/agent-sandbox/Dockerfile -t clemagents-sandbox:dev .
 ```
-*If you add a new, i.e. previously unsupported harness you would also have to add it to the defintion and start a new build*.
-Build once before running experiments.
+Build once before running experiments. Rebuild when adding harness software or
+changing its pinned version or dependencies.
 
 The runner uses `clemagents-sandbox:dev` by default. To use another locally built image set
 `CLEMAGENTS_SANDBOX_IMAGE`.
@@ -145,7 +144,6 @@ From the pipeline repository, install development dependencies in editable mode:
 
 ```bash
 python -m pip install -e '.[dev]'
-python -m pytest -q
 python -m build
 ```
 
@@ -153,11 +151,13 @@ The runner mounts the installed Python package read-only into each container.
 Editable Python changes therefore take effect without rebuilding the image;
 non-editable installations need reinstalling after source changes.
 
-Adding a harness requires an adapter and installation of its native software in
-the Dockerfile, followed by a rebuild. No game or engine-specific dispatch changes
-are needed. See [adding a harness](examples/add_harness/README.md).
+Each harness lives in `src/clemagents/adapters/<backend>/`, with its class in
+`<backend>.py` and optional `utils.py` and `parse.py` helpers. Shared utilities
+live in `adapters/utils/`. The registry's `backend` selects the class automatically.
 
-Tests use fixtures and local scripted endpoints. Native harness tests are opt-in
-and require the sandbox. See [pipeline documentation](documentation/pipeline.md)
-for the execution flow and [fresh-install checks](documentation/fresh-install.md)
-for release verification.
+To add a harness, implement the base interface and install its native software
+in the Dockerfile. See [adding a harness](examples/add_harness/README.md) for the
+class skeleton and trace format.
+
+See [pipeline documentation](documentation/pipeline.md) for the execution flow
+and [fresh-install checks](documentation/fresh-install.md) for release verification.

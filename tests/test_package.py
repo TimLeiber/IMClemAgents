@@ -10,12 +10,12 @@ from pathlib import Path
 
 from clemagents.adapters import harness_class_for_agent
 from clemagents.adapters.base import AgentRunResult, ExternalAgentHarness
-from clemagents.adapters.model_connection import resolve_agent_model_connection
+from clemagents.adapters.utils.model_connection import resolve_agent_model_connection
 
 
 def test_installed_resources_are_available():
     package = files("clemagents")
-    for name in ("adapters/external_agent_config.yaml", "mcp/mcp_server_config.yaml", "docker/agent-sandbox/Dockerfile",
+    for name in ("adapters/utils/external_agent_config.yaml", "mcp/mcp_server_config.yaml", "docker/agent-sandbox/Dockerfile",
                  "docker/agent-sandbox/run_agent_container.py"):
         assert package.joinpath(name).is_file()
 
@@ -30,7 +30,7 @@ def test_commands_work_outside_checkout(tmp_path):
 
 @pytest.mark.parametrize("effort", ["low", "none", {"native": "custom-setting"}])
 def test_new_adapter_needs_no_central_dispatch_change(tmp_path, monkeypatch, effort):
-    name = "clemagents.adapters.fixture"
+    name = "clemagents.adapters.fixture.fixture"
     module = types.ModuleType(name)
 
     class FixtureHarness(ExternalAgentHarness):
@@ -54,7 +54,7 @@ def test_new_adapter_needs_no_central_dispatch_change(tmp_path, monkeypatch, eff
                                                       "reasoning_effort": effort}}]))
 
     assert harness_class_for_agent("fixture-agent", registry) is FixtureHarness
-    with patch("clemagents.adapters.model_connection._find_model_spec", return_value={"model_name": "fixture-model",
+    with patch("clemagents.adapters.utils.model_connection._find_model_spec", return_value={"model_name": "fixture-model",
                                                                                       "backend": "fixture"}):
         assert resolve_agent_model_connection("fixture-agent", registry) == {"model": "fixture-model",
                                                                              "backend": "fixture"}
@@ -67,13 +67,43 @@ def test_core_is_an_external_dependency():
     assert importlib.util.find_spec("clemcore.agents") is None
 
 
+def test_harness_directory_is_discovered_without_registration(tmp_path, monkeypatch):
+    from clemagents import adapters
+
+    directory = tmp_path / "example"
+    directory.mkdir()
+    (directory / "__init__.py").write_text("")
+    example = Path(__file__).resolve().parents[1] / "examples/add_harness/example.py"
+    (directory / "example.py").write_text(example.read_text())
+    monkeypatch.setattr(adapters, "__path__", [*adapters.__path__, str(tmp_path)])
+    registry = tmp_path / "agent_registry.json"
+    registry.write_text(json.dumps([{"agent_name": "new-agent", "backend": "example",
+                                    "agent_config": {"model": "native-model"}}]))
+    try:
+        cls = harness_class_for_agent("new-agent", registry)
+        assert cls.__module__ == "clemagents.adapters.example.example"
+        assert cls(model="native-model").model == "native-model"
+        assert resolve_agent_model_connection("new-agent", registry) is None
+        events = [{"type": "assistant_text", "content": "native fixture output"}]
+        (tmp_path / "example_events.json").write_text(json.dumps(events))
+        output = cls.serialize_standardized_agent_trace(tmp_path)
+        saved = json.loads(output.read_text())
+        assert saved["backend"] == "example"
+        assert saved["events"][0]["content"] == "native fixture output"
+    finally:
+        sys.modules.pop("clemagents.adapters.example.example", None)
+        sys.modules.pop("clemagents.adapters.example", None)
+        if hasattr(adapters, "example"):
+            delattr(adapters, "example")
+
+
 def test_direct_model_skips_registry_resolution(tmp_path):
     registry = tmp_path / "agent_registry.json"
     registry.write_text(json.dumps([{"agent_name": "direct",
                                      "backend": "not-installed",
                                      "agent_config": {"model": "native-model",
                                                       "reasoning_effort": "custom"}}]))
-    with patch("clemagents.adapters.model_connection._find_model_spec") as lookup:
+    with patch("clemagents.adapters.utils.model_connection._find_model_spec") as lookup:
         assert resolve_agent_model_connection("direct", registry) is None
         lookup.assert_not_called()
 
@@ -83,7 +113,7 @@ def test_direct_model_skips_registry_resolution(tmp_path):
 @pytest.mark.parametrize("effort", [None, "low", "none", "off", " HIGH "])
 def test_model_resolution_does_not_construct_request_overrides(backend, harness, effort):
     from copy import deepcopy
-    from clemagents.adapters import model_connection
+    from clemagents.adapters.utils import model_connection
 
     spec = {"model_name": "test-model",
             "model_id": "provider/test-model",
@@ -96,7 +126,7 @@ def test_model_resolution_does_not_construct_request_overrides(backend, harness,
     original = deepcopy(spec)
     config = {"clem_model": "test-model", "reasoning_effort": effort}
     original_config = deepcopy(config)
-    module = importlib.import_module(f"clemagents.adapters.{harness}")
+    module = importlib.import_module(f"clemagents.adapters.{harness}.{harness}")
     adapter = next(value for value in vars(module).values() if isinstance(value, type)
                    and value.__module__ == module.__name__ and issubclass(value, ExternalAgentHarness))
     key_config = {"api_key": "fixture-key", "base_url": "http://localhost:11434/v1"}

@@ -7,7 +7,15 @@ from clemagents.adapters.base import ExternalAgentHarness
 
 
 def harness_class_for_agent(agent_name: str, registry_path: str | Path) -> type[ExternalAgentHarness]:
-    """Resolve an external-agent adapter class from the agent registry."""
+    """Load the single harness class from adapters/<backend>/<backend>.py.
+
+    Args:
+        agent_name: configured agent selected for the episode
+        registry_path: JSON file containing agent configurations
+
+    Returns:
+        the adapter class, without a central list of supported harnesses
+    """
 
     registry_path = Path(registry_path)
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
@@ -22,7 +30,7 @@ def harness_class_for_agent(agent_name: str, registry_path: str | Path) -> type[
     if not isinstance(backend, str) or not backend:
         raise ValueError(f"Agent '{agent_name}' has no valid backend")
 
-    module = importlib.import_module(f"clemagents.adapters.{backend}")
+    module = importlib.import_module(f"clemagents.adapters.{backend}.{backend}")
     harness_classes = [candidate for candidate in vars(module).values()
                        if inspect.isclass(candidate) and candidate is not ExternalAgentHarness
                        and issubclass(candidate, ExternalAgentHarness) and candidate.__module__ == module.__name__]

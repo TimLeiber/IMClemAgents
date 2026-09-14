@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .traces.schema import missing_agent_trace, normalize_agent_trace
+from .utils.parse import missing_agent_trace, normalize_agent_trace
 
 
 @dataclass

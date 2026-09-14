@@ -10,7 +10,7 @@ from clemagents import adapters
 from clemagents.adapters import harness_class_for_agent
 from clemagents.adapters.base import AgentRunResult
 
-CONFIG_PATH = (Path(adapters.__file__).resolve().parent / "external_agent_config.yaml")
+CONFIG_PATH = (Path(adapters.__file__).resolve().parent / "utils" / "external_agent_config.yaml")
 
 
 def _write_artifact_marker(payload: dict[str, Any], environment_variable: str) -> None:

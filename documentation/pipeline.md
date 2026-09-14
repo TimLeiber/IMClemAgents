@@ -27,11 +27,14 @@ the bridge forwards game actions to the host and returns observations.
 | `mcp/bridge.py` | Container-side MCP tools and observation delivery |
 | `adapters/base.py` | Small common harness interface |
 | `adapters/__init__.py` | Discover adapter class from the registry's backend name |
-| `adapters/{backend}.py` | Native configuration, startup and artifact export for that harness |
-| `adapters/traces/{backend}.py` | Parse that harness's native artifacts |
-| `adapters/model_connection.py` | Shared model registry, credential and provider helpers |
-| `adapters/utils.py` | Shared process and artifact utilities |
-| `adapters/openai_compatible_proxy.py` | Unmodified API payload recording/forwarding and shutdown gating |
+| `adapters/{backend}/{backend}.py` | Harness class implementing the base interface |
+| `adapters/{backend}/utils.py` | Helpers specific to that harness's native configuration and execution |
+| `adapters/{backend}/parse.py` | Parse that harness's native artifacts into uniform events |
+| `adapters/utils/model_connection.py` | Shared registry and credential lookup; delegates native configuration to the harness class |
+| `adapters/utils/__init__.py` | Shared process, artifact and TLS helpers |
+| `adapters/utils/openai_compatible_proxy.py` | Unmodified API payload recording/forwarding and shutdown gating |
+| `adapters/utils/parse.py` | Common trace contract and shared record-reading helpers |
+| `adapters/utils/external_agent_config.yaml` | Shared game-loop instruction and default configuration |
 | `transcribe_agent_loop/` | Harness-independent HTML rendering of uniform events |
 | `docker/agent-sandbox/` | Sandbox image and container entry point |
 
@@ -114,7 +117,7 @@ verification; combining both settings is rejected. Hermes uses native `SSL_CERT_
 `REQUESTS_CA_BUNDLE`; the other adapters configure their existing recorder's
 upstream TLS transport. Certificate and hostname verification remain enabled.
 No request bodies, tools, reasoning controls or native harness source are changed.
-New adapters can reuse `adapters/tls.py` without adding engine branches.
+New adapters can reuse the TLS helpers in `adapters/utils/` without adding engine branches.
 
 ### Codex context and model metadata
 
@@ -163,7 +166,7 @@ loss, a timeout and an early harness exit remain distinct in game/run metadata.
 Trace flow: native artifacts → adapter `parse_agent_trace` → validated
 `agent_loop.json` → `agentclem-transcribe` → `agent_loop.html`.
 Native parsing stays in the adapter; the HTML command consumes JSON only.
-The small shared contract lives in `adapters/traces/schema.py`. A parser need
+The small shared contract lives in `adapters/utils/parse.py`. A parser need
 only return an ordered `events` list; version, backend and sequence numbers can
 be supplied by the serializer. Unknown event types remain renderable without
 engine changes. See the [minimal trace example](../examples/add_harness/README.md#minimal-trace).

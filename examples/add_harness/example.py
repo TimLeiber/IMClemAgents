@@ -1,10 +1,10 @@
-"""Adapter skeleton: implement the two native operations before running it."""
+"""Adapter skeleton with native execution left for the contributor to implement."""
 
 import json
 from pathlib import Path
 
 from clemagents.adapters.base import AgentRunResult, ExternalAgentHarness
-from clemagents.adapters.traces.schema import missing_agent_trace
+from clemagents.adapters.utils.parse import missing_agent_trace
 from clemagents.adapters.utils import mcp_environment
 
 
@@ -18,8 +18,8 @@ class ExampleHarness(ExternalAgentHarness):
         # configure the native harness to launch this mcp server
         command = ["python", "-m", "clemagents.mcp.bridge"]
         environment = mcp_environment(self.mcp_url)
-        # run its documented cli/sdk with instruction and self.model. save
-        # native artifacts in output_dir, then return agentrunresult with paths
+        # run the native cli or sdk with the instruction and selected model
+        # save artifacts in output_dir and return their paths in the result
         raise NotImplementedError("Implement native harness setup and execution")
 
     @classmethod

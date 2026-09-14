@@ -41,7 +41,7 @@ Repository = "https://github.com/TimLeiber/IMClemAgents"
 where = ["src"]
 
 [tool.setuptools.package-data]
-clemagents = ["adapters/*.yaml", "mcp/*.yaml", "docker/agent-sandbox/*"]
+clemagents = ["adapters/utils/*.yaml", "mcp/*.yaml", "docker/agent-sandbox/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

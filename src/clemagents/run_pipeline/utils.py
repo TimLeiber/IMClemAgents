@@ -19,8 +19,8 @@ from clemcore.clemgame.registry import GameRegistry
 
 from clemagents.mcp.server import run_clem_mcp_server
 from clemagents.adapters import harness_class_for_agent
-from clemagents.adapters.model_connection import resolve_agent_model_connection
-from clemagents.adapters.traces.schema import missing_agent_trace, normalize_agent_trace
+from clemagents.adapters.utils.model_connection import resolve_agent_model_connection
+from clemagents.adapters.utils.parse import missing_agent_trace, normalize_agent_trace
 from clemagents.mcp.bridge import OpenEnvMCPClient
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
