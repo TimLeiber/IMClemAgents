@@ -1,0 +1,17 @@
+[style]
+based_on_style = pep8
+column_limit = 120
+continuation_align_style = space
+dedent_closing_brackets = false
+indent_closing_brackets = false
+split_before_closing_bracket = false
+split_before_first_argument = false
+split_before_named_assigns = false
+split_before_dict_set_generator = false
+each_dict_entry_on_separate_line = true
+disable_ending_comma_heuristic = true
+disable_split_list_with_comment = true
+split_penalty_after_opening_bracket = 10000
+split_penalty_import_names = 10000
+join_multiple_lines = false
+space_between_ending_comma_and_closing_bracket = false
