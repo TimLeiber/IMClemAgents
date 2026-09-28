@@ -1,208 +1,138 @@
-# Pipeline and dependency boundary
+# Pipeline
 
-The host runs the game through clemcore. A Docker container runs the selected
-harness. The harness connects to a small MCP bridge inside that container;
-the bridge forwards game actions to the host and returns observations.
+The framework connects clemcore games to external agent harnesses. The game
+runs on the host. Each episode gets a new Docker container containing the
+harness, its adapter, its tools and the MCP bridge. Model inference runs at the
+configured endpoint, which may be local or remote.
 
-1. `agentclem` selects the game instances and agent registry entry.
-2. The engine looks up the model registry entry; the adapter receives that entry
-   and the agent settings through `resolve_model_connection(model_spec, agent_config)`.
-3. The host starts the game server and creates a fresh container for each episode.
-4. The harness calls `start_game`, then `submit_response` for subsequent actions.
-5. Game observations return as text and, where supplied, image content. Image files
-   are also materialized inside the container as observations arrive.
-6. On completion or timeout, the pipeline finalizes the game and collects artifacts.
-   Normal completion allows bounded artifact finalization. At timeout the container
-   stops immediately; already-written artifacts are recovered without extending play.
-7. The adapter parses its artifacts into `agent_loop.json`. The shared renderer
-   turns those events into HTML. clemcore writes the normal game interactions and scores.
+## Running an episode
 
-## Files
+1. `agentclem` loads the selected game instances and agent registry entry.
+2. If `clem_model` is set, the engine looks up the model and credentials.
+   The adapter converts them into the harness's native configuration.
+3. The pipeline starts the host game server and runs the instances sequentially,
+   creating a fresh container for each one.
+4. Inside the container, the adapter launches the harness with its native settings,
+   the shared meta prompt and a connection to the MCP bridge.
+5. The harness calls `start_game` once to receive the initial observation.
+   It then calls `submit_response(response)` for each game move.
+6. When the game ends or the episode times out, the pipeline collects the
+   available artifacts and removes the container.
 
-| Location under `src/clemagents/` | Responsibility |
+Game rules, state and other players are handled by clemcore on the host.
+Adding a game therefore uses the normal Clembench game structure, not a harness
+adapter. Games, registries and experiment analysis live in the separate
+`IMClemAgents-clembench` repository.
+
+## MCP interface
+
+The harness is an MCP client. It starts the bridge as an MCP server over stdio.
+The bridge forwards calls to the host's OpenEnv `/mcp` endpoint using HTTP
+JSON-RPC.
+
+OpenEnv assigns an identifier to each game run. The bridge creates that run,
+adds its identifier to subsequent requests and closes it when the game ends.
+This is needed even though the pipeline runs one episode at a time.
+
+A `submit_response` call passes the response string to the host environment,
+which advances the clemcore game. The resulting observation travels back through
+the bridge as MCP text and image content. Images are also written to
+`/workspace/game_observations/` for tools that read local files. The harness
+decides how this content enters the model's context.
+
+The shared instruction is the `meta_prompt` field in
+`adapters/utils/external_agent_config.yaml`. Game-specific prompts remain in
+the game and are delivered through observations.
+
+## Package structure
+
+Paths below are relative to `src/clemagents/`.
+
+| Directory | Responsibility |
 | --- | --- |
 | `run_pipeline/` | CLI, episode scheduling, Docker lifecycle and artifact collection |
-| `mcp/environment.py` | Game discovery and execution through clemcore's existing turn-based environment |
-| `mcp/server.py` | Host server and clemcore result callbacks |
-| `mcp/bridge.py` | Container-side MCP tools and observation delivery |
-| `adapters/base.py` | Small common harness interface |
-| `adapters/__init__.py` | Discover adapter class from the registry's backend name |
-| `adapters/{backend}/{backend}.py` | Harness class implementing the base interface |
-| `adapters/{backend}/utils.py` | Helpers specific to that harness's native configuration and execution |
-| `adapters/{backend}/parse.py` | Parse that harness's native artifacts into uniform events |
-| `adapters/utils/model_connection.py` | Shared registry and credential lookup; delegates native configuration to the harness class |
-| `adapters/utils/__init__.py` | Shared process, artifact and TLS helpers |
-| `adapters/utils/openai_compatible_proxy.py` | Unmodified API payload recording/forwarding and shutdown gating |
-| `adapters/utils/parse.py` | Common trace contract and shared record-reading helpers |
-| `adapters/utils/external_agent_config.yaml` | Shared game-loop instruction and default configuration |
-| `transcribe_agent_loop/` | Harness-independent HTML rendering of uniform events |
-| `docker/agent-sandbox/` | Sandbox image and container entry point |
+| `mcp/` | Host game environment, server and container-side MCP bridge |
+| `adapters/<backend>/` | Harness class, native configuration and artifact parsing |
+| `adapters/utils/` | Shared model lookup, connection, process and trace helpers |
+| `transcribe_agent_loop/` | HTML rendering of parsed agent traces |
+| `docker/agent-sandbox/` | Dockerfile and container entry point |
 
-Project-specific post-processing lives in the separate `IMClemAgents-clembench`
-repository and is not included in this package.
-
-The engine contains no game-name or harness-name dispatch. Native tool names,
-model choices and request/response bodies are preserved. Harness source is not patched.
-
-The game integration uses unmodified clemcore. It checks termination before
-reading another turn and completes dead-player cleanup through the environment's
-normal methods. It neither subclasses nor patches `AECToGymWrapper`.
+Each adapter has its own directory with `<backend>.py`, `__init__.py` and
+optional `utils.py` and `parse.py` files. The registry's `backend` selects the
+class automatically. Adding a harness does not require changing shared dispatch
+code. See [adding a harness](../examples/add_harness/README.md).
 
 ## Configuration and traces
 
-The registry's `agent_config` is passed to the adapter constructor. Native
-options therefore belong to that adapter. See the constructor for its complete
-option list and the games repository for registry examples.
+The registry's `agent_config` supplies constructor arguments to the adapter.
+Explicit CLI settings override them for that run without editing the registry.
+The constructor lists the available options.
 
-The adapter's `resolve_model_connection` owns model and reasoning interpretation.
-Shared resolution only looks up data, calls that method and checks its return type;
-it does not apply a reasoning policy after the adapter returns. Direct model
-configurations without `clem_model` skip this method.
+With `clem_model`, shared code looks up the model entry and credentials, then
+calls the adapter's `resolve_model_connection` method. The adapter owns native
+model and generation settings. Direct model configurations skip this lookup.
 
-Set `reasoning_effort` in the agent registry, not the model registry's vanilla
-request settings. Each adapter uses the harness's native interface:
+Set reasoning and sampling controls in `agent_config`, not in the model
+registry's vanilla generation settings. Omitted controls retain native defaults.
 
-| Adapter | Native reasoning control | Native temperature control exposed here |
+| Adapter | Reasoning control | Temperature control |
 | --- | --- | --- |
-| Codex | `model_reasoning_effort` in `config.toml` | Not supported |
-| Claude Code | SDK `effort`; `none`/`off` requests native thinking disablement | Not supported |
-| Hermes | `agent.reasoning_effort`; stops if an explicit control is omitted from the native request | Not supported by the installed CLI |
-| OpenClaw | `--thinking` | `agents.defaults.models[model].params.temperature` |
+| Codex | Native `model_reasoning_effort` | Not exposed |
+| Claude Code | SDK `effort`, with `none`/`off` requesting thinking disablement | Not exposed |
+| Hermes | Native `agent.reasoning_effort` | Not exposed by the installed CLI |
+| OpenClaw | Native `--thinking` | Native model `params.temperature` |
 
-Use values accepted by the installed harness and selected model. Omitted controls
-leave native defaults intact; an effort label does not guarantee a token budget
-or identical behavior across harnesses. See the native references for
-[Codex](https://developers.openai.com/codex/config-reference/),
-[Claude Code](https://code.claude.com/docs/en/agent-sdk/python),
-[Hermes](https://hermes-agent.nousresearch.com/docs/user-guide/configuration/) and
-[OpenClaw](https://docs.openclaw.ai/tools/thinking).
+Supported values depend on the harness and provider. The same reasoning label
+need not produce the same behavior across harnesses. Hermes reports unsupported
+explicit reasoning settings rather than silently dropping them. Recorded
+requests show which controls were sent, not whether the provider honored them.
 
-Explicit CLI settings are copied into an isolated run registry and passed to the
-adapter constructor. They take precedence over registry settings without editing
-the original registry. Unsupported constructor options fail before container
-startup. Adding an adapter requires no central mapping of generation controls.
+### TLS
 
-The recorder never injects `extra_body`, temperature, reasoning or a replacement
-model. Stale connections requesting such overwrites are rejected. Built-in adapters
-warn when a model registry contains vanilla generation settings; configure the
-corresponding native agent controls instead. OpenClaw's custom model definition
-may use registry capability metadata to select its native protocol, but does not
-copy the vanilla thinking value into run parameters.
+For additional trusted certificates, set `agent_config.ca_bundle` to a public
+PEM file on the host. Its certificates are added to the container's trust store.
 
-### TLS connection settings
+Alternatively, `agent_config.verify_tls: false` disables certificate verification
+for that agent's model connection. Use this only for a trusted endpoint when
+necessary. Both options require `clem_model` and cannot be combined.
+Credentials remain in `key.json`.
 
-To match vanilla clemcore's OpenAI-compatible TLS behavior, set
-`"verify_tls": false` in the agent's `agent_config`. No certificate file is
-needed. This option requires `clem_model` and applies to that agent's model
-connection; unrelated agents retain their existing settings. `key.json` remains
-endpoint-and-credentials configuration shared with vanilla clembench.
+Hermes normally connects directly and uses forwarding when verification is
+disabled. These connection settings do not change model request bodies.
 
-All built-in adapters accept this option. Their adapter-side forwarding transport
-sets upstream certificate verification accordingly, without changing request bodies.
-Hermes normally connects directly; only `verify_tls: false` enables forwarding for
-it because the installed CLI has no native model-client verification-off setting.
-Its native observers and full request dumps remain active. The forwarding URL is
-recorded separately from the upstream URL in adapter metadata. Native behavior can
-depend on endpoint URLs, so verify controls and tools for each new provider route.
+### Codex context
 
-For a server requiring additional certificates, set `agent_config.ca_bundle` to a
-public PEM file on the host, for example `"~/.clemcore/certificates/provider.pem"`.
-This optional adapter setting requires `clem_model`; it does not belong in `key.json`.
-Credentials and endpoint URLs remain shared with vanilla clembench.
+Registry `context_size` is forwarded to Codex's native `model_context_window`.
+An explicit `agent_config.model_context_window` overrides it.
+`model_auto_compact_token_limit` optionally sets the native compaction threshold.
+Both values are integer token counts. They configure Codex, not the inference
+server's context allocation.
 
-Each built-in adapter resolves the file through `resolve_model_connection` before
-startup. Only its public certificates are carried into the container, where they
-are appended to the default public roots. This is an alternative to disabling
-verification; combining both settings is rejected. Hermes uses native `SSL_CERT_FILE` and
-`REQUESTS_CA_BUNDLE`; the other adapters configure their existing recorder's
-upstream TLS transport. Certificate and hostname verification remain enabled.
-No request bodies, tools, reasoning controls or native harness source are changed.
-New adapters can reuse the TLS helpers in `adapters/utils/` without adding engine branches.
+Unknown models use Codex's native fallback. The adapter does not generate model
+catalogs. An optional `agent_config.model_catalog` supplies a complete native
+JSON catalog containing the selected model's `slug`.
 
-### Codex context and model metadata
+## Results and artifacts
 
-The Codex adapter forwards model-registry `context_size` to native
-`model_context_window` in `config.toml`. An explicit `agent_config.model_context_window`
-overrides that value, for example when a local server allocates less than the model's
-maximum context. This configures Codex, not the server's context allocation.
-An optional `model_auto_compact_token_limit` sets Codex's native compaction threshold;
-when omitted, Codex retains its native compaction policy. Both values use integer tokens.
-The configuration is saved before inference, including for interrupted episodes.
+The host saves game instances and interactions through clemcore callbacks.
+Harness artifacts are collected separately into the episode's result directory.
+Scoring remains a separate Clembench step.
 
-The adapter does not generate model profiles or copy Codex's internal defaults.
-Unknown models use Codex's native fallback and may produce its metadata warning;
-the registry context size still reaches the native context control described above.
-Other registry metadata is not injected through a synthetic catalog. Reasoning effort
-comes from the agent configuration, never the model registry's vanilla request settings.
-No provider requests are rewritten and no catalog-version guard blocks startup.
+The container announces its artifact directory before adapter initialization
+and marks it ready after finalization. Normal completion allows time to finish
+writing artifacts. At timeout, the pipeline stops the container and recovers
+files already written. Capture may therefore be partial or unavailable.
+This status is recorded in metadata and shown in the transcript.
 
-An optional `agent_config.model_catalog` accepts a complete native JSON catalog
-(`{"models": [...]}`), including the selected model's `slug`. Only this explicitly
-supplied catalog is saved with the artifacts and passed through `model_catalog_json`.
-Context configuration does not prove that a live episode compacted, nor does it
-allocate context on the server.
+Each adapter's `parse_agent_trace` method turns native artifacts into ordered
+events. The shared serializer validates them and writes `agent_loop.json`.
+`agentclem-transcribe` renders this file as `agent_loop.html`, without running
+the model or changing the recorded game.
 
-The real model ID is passed to the harness, including Claude Code's SDK. Subagent
-model choices remain the harness's responsibility. The recorder still gates new
-inference after game completion so artifact finalization cannot prolong play.
-Hermes instead uses its native plugin observers and full request dumps, preserving
-the original endpoint because its native reasoning support depends on that URL.
-Its completion hooks and process-group shutdown stop further conversation work;
-native session export collects the saved conversation afterwards. Capture is
-explicitly partial: completed reasoning and tool events are available, but raw
-SSE, interrupted streams, SDK-internal retries and auxiliary API calls can be absent.
-Claude Code's native `off` omits `thinking` on the wire; compatible providers must
-be checked for their interpretation of that omission.
-A registry setting alone is not evidence of provider behavior: inspect recorded
-requests when verifying reasoning effort, sampling settings or model routing.
-Offline tests verify adapter configuration and byte-preserving transport, not
-whether every provider honors every setting.
-The [native request verification](offline-verification.md) records installed-harness
-wire checks, integration corrections and the remaining live-provider checks.
+Capture depends on the harness. Hermes uses native observers and request dumps,
+which may omit interrupted streams, internal retries or auxiliary API calls.
+Missing trace content does not establish that an action did not occur.
+Parsing failures produce visible warnings while preserving raw artifacts.
 
-`AgentRunResult.success` describes adapter execution. Game success, a legitimate
-loss, a timeout and an early harness exit remain distinct in game/run metadata.
-
-Trace flow: native artifacts → adapter `parse_agent_trace` → validated
-`agent_loop.json` → `agentclem-transcribe` → `agent_loop.html`.
-Native parsing stays in the adapter; the HTML command consumes JSON only.
-The small shared contract lives in `adapters/utils/parse.py`. A parser need
-only return an ordered `events` list; version, backend and sequence numbers can
-be supplied by the serializer. Unknown event types remain renderable without
-engine changes. See the [minimal trace example](../examples/add_harness/README.md#minimal-trace).
-
-Missing capture, empty parser output and parser failures are visible warnings,
-not silent empty transcripts. Invalid event structure is rejected at the boundary;
-the pipeline preserves raw artifacts and writes a warning trace if parsing fails.
-Optional capture metadata describes what was actually recorded, not what the
-model necessarily generated. The contract does not enforce game outcomes or
-change harness behavior.
-
-The container publishes `artifacts_started.json` before adapter initialization,
-identifying the current run's directory inside shared storage. After normal
-finalization it publishes `artifacts_ready.json`. The host clears both markers
-before each episode and validates their paths. If finalization never completes,
-it still copies the announced directory before temporary storage is removed.
-Such captures are labelled `partial` in run metadata and the HTML transcript;
-files and the last event may be incomplete, and a session export may be absent.
-Missing directories are labelled `unavailable`, never silently treated as complete.
-This lifecycle is shared by every adapter; native file interpretation remains
-in each adapter's parser.
-
-## Code style
-
-Keep short calls, definitions and collections inline. For longer expressions,
-align continuation lines with the first argument or item after the opening
-delimiter, and keep closing delimiters with the last item where practical.
-Use 120 columns as a guideline, not a reason to split every argument onto its
-own line. `.style.yapf` supplies formatter defaults; retain visual alignment
-when reviewing nested collections. Write concise lowercase comments without
-trailing punctuation. Keep docstrings in the existing `Args:` / `Returns:` style.
-
-## Installation checks
-
-The initial extraction is tested in an isolated virtual environment against
-the PyPI `clemcore==3.7.2` wheel. No local clemcore checkout is installed or mounted.
-The sandbox mounts only the extracted `clemagents` package and uses its own
-installed clemcore dependency. A Docker build and live provider smoke test are
-separate checks from the automated fixture tests.
+`AgentRunResult.success` describes adapter execution, not game success.
+Wins, losses, timeouts and premature harness exits are recorded separately.

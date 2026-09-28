@@ -38,8 +38,7 @@ meta_prompt: |-
   - *Nothing is forbidden and you can explore and use any workaround when you deem it necessary*
   - *You can use any strategy that improves your performance in the game*
   -DO NOT ENGAGE IN EXCESSIVE AUXILIARY TOOL CALLING.
-  WHEN YOU HAVE MADE A LOT OF AUXILIARY TOOL CALLS RATHER ADVANCE THE GAME STATE AT SOME POINT TO ADVANCE THE GAME TO AVOID TIMEOUT
-  
+
   Non-game tools must not be used before start_game returns.
   All actual game actions must still go through submit_response.
 

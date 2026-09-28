@@ -159,5 +159,4 @@ To add a harness, implement the base interface and install its native software
 in the Dockerfile. See [adding a harness](examples/add_harness/README.md) for the
 class skeleton and trace format.
 
-See [pipeline documentation](documentation/pipeline.md) for the execution flow
-and [fresh-install checks](documentation/fresh-install.md) for release verification.
+See [pipeline documentation](documentation/pipeline.md) for the execution flow.

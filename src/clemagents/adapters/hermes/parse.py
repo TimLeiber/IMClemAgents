@@ -768,10 +768,18 @@ def _hermes_cli_records(stdout: str) -> list[dict[str, Any]]:
 
 
 def _hermes_chat_stdout(trace_text: str) -> str:
-    """Return only Hermes chat stdout from the combined adapter trace."""
+    """Separate chat output from adapter-prefixed stderr diagnostics.
+
+    Args:
+        trace_text (str): Combined adapter trace with tagged stderr lines.
+
+    Returns:
+        str: Chat display text without interleaved runtime diagnostics.
+    """
 
     match = re.search(r"hermes_chat_stdout:\n(?P<content>.*?)(?:\nhermes_chat_stderr:|\Z)", trace_text, flags=re.DOTALL)
-    return match.group("content") if match is not None else trace_text
+    stdout = match.group("content") if match is not None else trace_text
+    return re.sub(r"^harness_stderr:[^\n]*(?:\n|$)", "", stdout, flags=re.MULTILINE)
 
 
 def _hermes_content_text(content: Any) -> str:

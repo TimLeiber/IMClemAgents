@@ -14,6 +14,7 @@ module_logger = logging.getLogger(__name__)
 
 MAX_DIAGNOSTIC_CHARACTERS = 20_000
 DATA_URL_PATTERN = re.compile(r"data:(?P<mime>image|audio|video)/[^;,\s]+;base64,[A-Za-z0-9+/=]+")
+IMAGE_DATA_PATTERN = re.compile(r"data:image/(?:png|jpeg|jpg|gif|webp);base64,[A-Za-z0-9+/=]+")
 
 CSS = """
 body {
@@ -112,6 +113,14 @@ body {
     color: #52606d;
     font-size: 12px;
     margin: 0;
+}
+
+.image-preview {
+    display: block;
+    max-width: 100%;
+    max-height: 360px;
+    margin: 10px 0;
+    object-fit: contain;
 }
 
 pre {
@@ -343,7 +352,14 @@ def _event_details(event: dict[str, Any]) -> str:
 
 
 def _event_body(event: dict[str, Any]) -> str:
-    """Render visible content and collapsible full snapshots for one event."""
+    """Render event text, image previews, and collapsible structured details.
+
+    Args:
+        event (dict[str, Any]): Normalized agent-loop event.
+
+    Returns:
+        str: Escaped HTML with embedded media kept out of text blocks.
+    """
 
     event_type = event.get("type")
 
@@ -365,6 +381,11 @@ def _event_body(event: dict[str, Any]) -> str:
         content = event.get("content", event.get("payload", event))
 
     body = f"<pre>{format_event_content(_redact_media_payloads(content))}</pre>"
+    images = list(dict.fromkeys(_embedded_images(content)))
+    for index, url in enumerate(images, 1):
+        safe_url = format_event_content(url)
+        body += (f'<img class="image-preview" loading="lazy" src="{safe_url}" '
+                 f'alt="Captured tool image {index}">')
 
     if "payload" in event and event_type != "tool_definitions":
         body += ('<details><summary>Full structured payload</summary>'
@@ -382,7 +403,14 @@ def _event_body(event: dict[str, Any]) -> str:
 
 
 def _protocol_event_preview(event: dict[str, Any]) -> str:
-    """Return a bounded, text-only diagnostic representation of wire traffic."""
+    """Return a bounded, text-only diagnostic representation of wire traffic.
+
+    Args:
+        event (dict[str, Any]): Captured model request or response.
+
+    Returns:
+        str: Diagnostic text with embedded media bytes omitted.
+    """
 
     if event.get("type") == "model_request" and event.get("payload"):
         value = json.dumps(_redact_media_payloads(event["payload"]), indent=2, ensure_ascii=False, default=str)
@@ -396,7 +424,7 @@ def _protocol_event_preview(event: dict[str, Any]) -> str:
             return (f"[compressed or binary wire body omitted; "
                     f"{len(raw):,} captured characters]")
 
-        value = DATA_URL_PATTERN.sub(lambda match: f"[embedded {match.group('mime')} data omitted]", raw)
+        value = str(_redact_media_payloads(raw))
 
     if len(value) > MAX_DIAGNOSTIC_CHARACTERS:
         omitted = len(value) - MAX_DIAGNOSTIC_CHARACTERS
@@ -406,18 +434,54 @@ def _protocol_event_preview(event: dict[str, Any]) -> str:
 
 
 def _redact_media_payloads(value: Any) -> Any:
-    """Replace embedded media bytes with concise typed placeholders."""
+    """Hide media bytes in text displays while preserving surrounding content.
+
+    Args:
+        value (Any): Structured content or a serialized diagnostic body.
+
+    Returns:
+        Any: A display-only copy with media data replaced by placeholders.
+    """
 
     if isinstance(value, dict):
-        return {key: _redact_media_payloads(item) for key, item in value.items()}
+        encoded = value.get("type") in ("base64", "image", "audio", "video")
+        return {key: "[embedded media data omitted]" if key == "data" and encoded else _redact_media_payloads(item)
+                for key, item in value.items()}
 
     if isinstance(value, list):
         return [_redact_media_payloads(item) for item in value]
 
     if isinstance(value, str):
-        return DATA_URL_PATTERN.sub(lambda match: f"[embedded {match.group('mime')} data omitted]", value)
+        text = DATA_URL_PATTERN.sub(lambda match: f"[embedded {match.group('mime')} data omitted]", value)
+        return re.sub(r'("data"\s*:\s*")[A-Za-z0-9+/=]{512,}(")',
+                      r'\1[embedded media data omitted]\2', text)
 
     return value
+
+
+def _embedded_images(value: Any) -> list[str]:
+    """Find embedded image blocks without fetching remote or local resources.
+
+    Args:
+        value (Any): Captured tool content in Anthropic, MCP, or OpenAI format.
+
+    Returns:
+        list[str]: Valid raster-image data URLs for inline previews.
+    """
+    if isinstance(value, list):
+        return [url for item in value for url in _embedded_images(item)]
+    if isinstance(value, dict):
+        if value.get("type") == "image":
+            source = value.get("source", value)
+            if isinstance(source, dict):
+                mime = source.get("media_type") or source.get("mimeType")
+                url = f"data:{mime};base64,{source.get('data', '')}"
+                if IMAGE_DATA_PATTERN.fullmatch(url):
+                    return [url]
+        return [url for item in value.values() for url in _embedded_images(item)]
+    if isinstance(value, str):
+        return [match.group(0) for match in IMAGE_DATA_PATTERN.finditer(value)]
+    return []
 
 
 def main() -> None:
