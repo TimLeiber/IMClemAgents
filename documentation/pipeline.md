@@ -25,23 +25,24 @@ adapter. Games, registries and experiment analysis live in the separate
 `IMClemAgents-clembench` repository.
 
 ## MCP interface
-
+The following image illustrated the dataflow when the model makes an MCP call to transition to the next game state.
+It also includes information on where the docker, the MCP server The game environment with the other models live etc. 
 [![Tool-call and result flow between the model, harness, MCP bridge and host game environment](images/architecture_tool_flow.png)](images/architecture_tool_flow.pdf)
 
-Tool-call and result flow for `submit_response`. Gray marks the host, blue the
+-->
+Tool-call and result flow for `submit_response` call, i.e. an MCP tool in the framework. Gray marks the host, blue the
 Docker container running on it. The model endpoint may be on the host, on the
 local network or remote. Click the diagram to open the PDF.
 
 The harness is an MCP client. It starts the bridge as an MCP server over stdio.
-The bridge forwards calls to the host's OpenEnv `/mcp` endpoint using HTTP
-JSON-RPC.
+The bridge forwards calls to the host's OpenEnv `/mcp` endpoint using HTTP.
 
-OpenEnv assigns an identifier to each game run. The bridge creates that run,
-adds its identifier to subsequent requests and closes it when the game ends.
-This is needed even though the pipeline runs one episode at a time.
+OpenEnv assigns an identifier to each game run which in turn necessitated teh bridge on the docker container.
+The bridge creates that run, adds its identifier to subsequent requests and closes it when the game ends.
+This is needed even though the pipeline runs one episode at a time because of teh way the host endpoint expects input.
 
 In steps 1–4, the model requests `submit_response`, the harness calls the bridge,
-and the bridge forwards the response string to the host environment. The host
+and the bridge forwards the response string to the host environment where a fucntion is called to act on the environment. The host
 uses it as the player's next move in the clemcore game.
 
 In steps 5–8, the resulting observation returns through the host endpoint and
@@ -52,7 +53,7 @@ decides how this content enters the model's context.
 
 The shared instruction is the `meta_prompt` field in
 `adapters/utils/external_agent_config.yaml`. Game-specific prompts remain in
-the game and are delivered through observations.
+the game and are delivered through observations. This is where one would change the meta prompt.
 
 ## Package structure
 
@@ -96,31 +97,6 @@ Supported values depend on the harness and provider. The same reasoning label
 need not produce the same behavior across harnesses. Hermes reports unsupported
 explicit reasoning settings rather than silently dropping them. Recorded
 requests show which controls were sent, not whether the provider honored them.
-
-### TLS
-
-For additional trusted certificates, set `agent_config.ca_bundle` to a public
-PEM file on the host. Its certificates are added to the container's trust store.
-
-Alternatively, `agent_config.verify_tls: false` disables certificate verification
-for that agent's model connection. Use this only for a trusted endpoint when
-necessary. Both options require `clem_model` and cannot be combined.
-Credentials remain in `key.json`.
-
-Hermes normally connects directly and uses forwarding when verification is
-disabled. These connection settings do not change model request bodies.
-
-### Codex context
-
-Registry `context_size` is forwarded to Codex's native `model_context_window`.
-An explicit `agent_config.model_context_window` overrides it.
-`model_auto_compact_token_limit` optionally sets the native compaction threshold.
-Both values are integer token counts. They configure Codex, not the inference
-server's context allocation.
-
-Unknown models use Codex's native fallback. The adapter does not generate model
-catalogs. An optional `agent_config.model_catalog` supplies a complete native
-JSON catalog containing the selected model's `slug`.
 
 ## Results and artifacts
 
