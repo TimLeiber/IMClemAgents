@@ -1,8 +1,9 @@
 # Add a harness
 
+Addings a harness requires you to first create a directory for it in the following way:
 Create `src/clemagents/adapters/example/`, add an empty `__init__.py`, and copy
-[example.py](example.py) into it. Follow [base.py](../../src/clemagents/adapters/base.py)
-and the built-in harness directories:
+[example.py](example.py) into it as well. Follow [base.py](../../src/clemagents/adapters/base.py)
+When defining the required methods for the adapter to interface with the engine.
 
 ```text
 example/
@@ -12,8 +13,16 @@ example/
     parse.py       # optional native artifact parser
 ```
 
-The registry's `backend` selects `adapters/<backend>/<backend>.py` automatically.
-Adding a harness requires no changes to discovery, shared utilities or the engine.
+In the games repository's `agent_registry.json`, you define which harness a model
+uses by setting `backend`. For example, `"backend": "example"` loads the harness
+class from `src/clemagents/adapters/example/example.py`. The directory and Python
+file must both match this name, and the file must define one subclass of
+`ExternalAgentHarness`.
+
+This is similar to selecting a backend in regular Clembench, but here `backend`
+selects the harness, not the model provider. See the existing entries in the
+[agent registry](https://github.com/TimLeiber/IMClemAgents-clembench/blob/main/agent_registry.json)
+for examples.
 
 ## Implement the class
 
@@ -29,16 +38,68 @@ returns a JSON-serializable connection dictionary that the adapter reads with
 `load_model_connection` from `clemagents.adapters.utils`. Shared code does not
 rewrite provider request bodies.
 
-Configure the harness to launch `python -m clemagents.mcp.bridge` using the
-environment from `mcp_environment`. Use the shared process/completion helpers
-to stop when the game ends and preserve partial artifacts on timeout. Store
-artifacts under `output_dir`; the container entry point publishes the final
-artifacts-ready marker. `AgentRunResult.success` describes adapter execution,
-not whether the model won the game.
+### Connect the harness to the game
+
+The harness does not know the game tools yet. Your adapter must connect it to
+the program that provides `start_game` and `submit_response`. That program is
+already part of the framework: `clemagents.mcp.bridge`. It receives tool calls
+from the harness and forwards them to the game running on the host.
+
+Inside `run_episode`, use the harness's MCP settings to tell it to start this
+program with the following command:
+
+```bash
+python -m clemagents.mcp.bridge
+```
+
+Here, `python` starts the Python interpreter inside the container. `-m` tells
+Python to run the installed module named `clemagents.mcp.bridge`. The harness
+starts it as a separate process when connecting to its MCP tools. This is not
+a command for the model to generate or for the user to run manually.
+
+For example, with the Claude Code SDK, the relevant configuration can be written
+as follows inside `run_episode`:
+
+```python
+from claude_agent_sdk import ClaudeAgentOptions
+from clemagents.adapters.utils import mcp_environment
+
+options = ClaudeAgentOptions(mcp_servers={"game": {
+    "type": "stdio",
+    "command": "python",
+    "args": ["-m", "clemagents.mcp.bridge"],
+    "env": mcp_environment(self.mcp_url)}})
+```
+
+`command` and `args` are the SDK's way of storing the command shown above.
+`stdio` means the harness sends and receives MCP messages through the process's
+standard input and output. `env` supplies settings to that process.
+`mcp_environment(self.mcp_url)` prepares those settings, including the host game
+server's address and the experiment and instance selected by the pipeline.
+
+Pass these options when starting the SDK. For another harness, register the same
+command through that harness's MCP configuration format. The bridge and game
+tools do not need to be reimplemented. The
+[Claude Code adapter](../../src/clemagents/adapters/claude_code/claude_code.py)
+shows the complete SDK setup. The [pipeline diagram](../../documentation/pipeline.md#mcp-interface)
+shows how the tool call reaches the game and how feedback returns.
+
+### Stop execution and save output
+
+When the game finishes, the bridge writes a completion file. CLI adapters can
+use `run_process_until_game_complete` to watch that file and stop the harness.
+SDK adapters can check it with `read_game_completion` while receiving messages,
+as the Claude Code adapter does.
+
+Save the harness's logs and other output under `output_dir` as it runs. The
+pipeline copies those files to the host before removing the container, including
+files already written when an episode times out. Return `AgentRunResult` when
+the adapter finishes. Its `success` field reports whether adapter execution
+succeeded, not whether the model won the game.
 
 ## Register and install
 
-Add an entry to the games repository's `agent_registry.json`:
+Add an entry to the list in the games repository's `agent_registry.json`:
 
 ```json
 {
@@ -47,6 +108,12 @@ Add an entry to the games repository's `agent_registry.json`:
   "agent_config": {"model": "my-model"}
 }
 ```
+
+`agent_name` is the name you pass to `agentclem --agent`. `backend` identifies
+your adapter, and `agent_config` supplies its constructor arguments. Here,
+`model` is passed directly to the example class. Built-in adapters also support
+`clem_model`, which refers to a model entry in `model_registry.json` and uses
+the credentials in `key.json`.
 
 Install the harness software with an explicit version in
 `src/clemagents/docker/agent-sandbox/Dockerfile`, then build from the pipeline repository:
@@ -74,18 +141,16 @@ Return a dictionary with an ordered `events` list:
 
 Each event needs a non-empty `type` and JSON-serializable values. Preserve the
 observed order, tool names and call IDs. Other supported types include
-`assistant_text`, `instruction`, `error` and `trace_warning`; unknown types remain
+`assistant_text`, `instruction`, `error` and `trace_warning`. Unknown types remain
 renderable. Use `agent_id` and `parent_call_id` for subagent events when available.
 
 Return `missing_agent_trace(reason, backend)` from `clemagents.adapters.utils.parse`
 when capture is unavailable, or add a `trace_warning` for partial capture.
-Only include reasoning and other output actually recorded by the harness.
 
+Once you creted this function the engine takes care of the rest.
 The inherited serializer validates events, fills in version/backend/sequence
 fields, and writes `agent_loop.json`. `agentclem-transcribe -r test_results`
 renders that JSON as HTML without loading the harness. Native parsing stays
 inside the adapter; a new adapter needs no renderer changes.
 
-Check the parser against saved native output, then run one game episode into
-`test_results` and inspect its tool calls, artifacts and transcript. A game win
-is not required to verify the integration.
+For an initial implementation of a harness it is recommended to create a mock output for this function.

@@ -26,6 +26,12 @@ adapter. Games, registries and experiment analysis live in the separate
 
 ## MCP interface
 
+[![Tool-call and result flow between the model, harness, MCP bridge and host game environment](images/architecture_tool_flow.png)](images/architecture_tool_flow.pdf)
+
+Tool-call and result flow for `submit_response`. Gray marks the host, blue the
+Docker container running on it. The model endpoint may be on the host, on the
+local network or remote. Click the diagram to open the PDF.
+
 The harness is an MCP client. It starts the bridge as an MCP server over stdio.
 The bridge forwards calls to the host's OpenEnv `/mcp` endpoint using HTTP
 JSON-RPC.
@@ -34,9 +40,13 @@ OpenEnv assigns an identifier to each game run. The bridge creates that run,
 adds its identifier to subsequent requests and closes it when the game ends.
 This is needed even though the pipeline runs one episode at a time.
 
-A `submit_response` call passes the response string to the host environment,
-which advances the clemcore game. The resulting observation travels back through
-the bridge as MCP text and image content. Images are also written to
+In steps 1–4, the model requests `submit_response`, the harness calls the bridge,
+and the bridge forwards the response string to the host environment. The host
+uses it as the player's next move in the clemcore game.
+
+In steps 5–8, the resulting observation returns through the host endpoint and
+bridge as MCP text and image content. The harness includes that tool result in
+the next request to the model. Images are also written to
 `/workspace/game_observations/` for tools that read local files. The harness
 decides how this content enters the model's context.
 
